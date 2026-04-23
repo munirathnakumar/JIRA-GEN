@@ -136,11 +136,21 @@ def _display_status(canonical):
     return canonical, _sl(canonical)
 
 def _app_display_status(app_instances_in_phase):
-    """Aggregate display status — two buckets only: Completed or Pending."""
+    """Row pill status — two buckets only: Completed or Pending."""
     statuses = [inst.get("status","not_started") for inst in app_instances_in_phase]
     if all(s in config.COMPLETED_STATUSES for s in statuses):
         return "completed", "Completed"
     return "pending", "Pending"
+
+def _app_orig_status(app_instances_in_phase):
+    """Granular status for the top-right breakdown bar (not the row pill)."""
+    statuses = [inst.get("status","not_started") for inst in app_instances_in_phase]
+    if all(s in config.COMPLETED_STATUSES for s in statuses):
+        return "completed"
+    if any(s == "in_progress"    for s in statuses): return "in_progress"
+    if any(s == "de_scoped"      for s in statuses): return "de_scoped"
+    if any(s == "future_request" for s in statuses): return "future_request"
+    return "not_started"
 
 def _build_phase_rows(applications, phase_summary):
     rows = []
@@ -393,7 +403,7 @@ def build_slide1(prs, phase_rows):
 
     # ── Notes ─────────────────────────────────────────────────────────────────
     NB_Y = bottom + 0.06
-    NB_H = 0.48
+    NB_H = 0.58
     NB_W = (9.64 - 0.10) / 2
     note_defs = [
         ("What is a Unique Application?",
@@ -413,9 +423,9 @@ def build_slide1(prs, phase_rows):
         add_rect(slide, NX, NB_Y, 0.04, NB_H, nc)
         add_text(slide, title, NX+0.10, NB_Y+0.04, NB_W-0.14, 0.14,
                  sz=7.5, bold=True, color=nc, va="top")
-        add_text(slide, body,  NX+0.10, NB_Y+0.19, NB_W-0.14, 0.18,
+        add_text(slide, body,  NX+0.10, NB_Y+0.20, NB_W-0.14, 0.18,
                  sz=6.5, color=C.txt_mid, va="top")
-        add_text(slide, ex,    NX+0.10, NB_Y+0.37, NB_W-0.14, 0.10,
+        add_text(slide, ex,    NX+0.10, NB_Y+0.44, NB_W-0.14, 0.12,
                  sz=6, italic=True, color=C.txt_muted, va="top")
 
     # Status legend
@@ -471,6 +481,7 @@ def build_detail_slides(prs, phase, applications):
             "name":        app["name"],
             "disp_status": disp_st,
             "disp_label":  disp_lbl,
+            "orig_status": _app_orig_status(ph_insts),   # granular — for top-right bar
             "prod_done":   sum(inst.get("prod_done",0)      for inst in ph_insts),
             "prod_total":  sum(inst.get("prod_total",0)     for inst in ph_insts),
             "np_done":     sum(inst.get("non_prod_done",0)  for inst in ph_insts),
@@ -492,10 +503,8 @@ def build_detail_slides(prs, phase, applications):
     all_np_done    = sum(r["np_done"]    for r in app_rows)
     all_np_total   = sum(r["np_total"]   for r in app_rows)
 
-    # 5-status counts at app level (for coverage bar on each page)
-    all_st_counts = {s: sum(1 for r in app_rows
-                            if _display_status(r["disp_status"])[0] == s
-                            or r["disp_status"] == s)
+    # Granular status counts for top-right breakdown bar
+    all_st_counts = {s: sum(1 for r in app_rows if r["orig_status"] == s)
                      for s in ALL_STATUSES}
 
     for page_idx in range(total_pages):
