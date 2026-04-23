@@ -526,7 +526,7 @@ def _build_one_detail_slide(prs, phase, ph_short, ph_color,
     badge = (f"{ph_short} · {total_apps} Apps"
              if total_pages == 1
              else f"{ph_short} · Pg {page_num}/{total_pages}")
-    header(slide, f"{phase} Applications — Integration Status", badge)
+    header(slide, f"{_phase_label(phase)} Applications — Integration Status", badge)
 
     # ── Coverage pills & 5-status bar ────────────────────────────────────────
     INST_Y = 0.66

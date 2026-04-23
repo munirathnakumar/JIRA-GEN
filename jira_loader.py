@@ -141,8 +141,8 @@ def _get_appendix_app(subtask):
 
 
 def _get_phase(issue):
-    raw = _field_value(_field(issue, PHASE_FIELD)) or ""
-    return PHASE_DISPLAY_NAMES.get(raw, raw)
+    """Return raw JIRA phase value — display name mapping applied in generator."""
+    return _field_value(_field(issue, PHASE_FIELD)) or ""
 
 def _get_instance_name(issue):
     if INSTANCE_NAME_FIELD == "summary":
@@ -245,11 +245,6 @@ def _subtask_extra_fields():
     return ",".join(f for f in fields if f and f != "customfield_XXXXX")
 
 
-def _subtask_extra_fields():
-    if INSTANCE_TYPE_FIELD and INSTANCE_TYPE_FIELD != "customfield_XXXXX":
-        return INSTANCE_TYPE_FIELD
-    return ""
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Milestone builder — groups Stories by parent summary
@@ -298,9 +293,7 @@ def _build_milestones(issues, cfg):
             "key"   : iss.get("key", ""),
             "task"  : _field(iss, "summary") or "",
             "status": canonical,
-            "phase" : PHASE_DISPLAY_NAMES.get(
-                _field_value(_field(iss, phase_field)), ""
-            ),
+            "phase" : _field_value(_field(iss, phase_field)) or "",
         })
 
     # Derive section-level status from tasks (any in_progress → in_progress, all done → completed)
