@@ -45,15 +45,10 @@ def _post(url, body):
     headers = {**_headers(), "Content-Type": "application/json"}
     resp = requests.post(url, headers=headers, auth=_auth(), json=body)
     if not resp.ok:
-        print(f"\n❌  JIRA API error {resp.status_code} — {url}")
-        try:
-            err = resp.json()
-            for msg in err.get("errorMessages", []):
-                print(f"    {msg}")
-            for k, v in err.get("errors", {}).items():
-                print(f"    {k}: {v}")
-        except Exception:
-            print(f"    {resp.text[:300]}")
+        print(f"\n{'='*60}")
+        print(f"❌  JIRA {resp.status_code} — {url}")
+        print(f"    Raw response: {resp.text[:600]}")
+        print(f"{'='*60}\n")
         resp.raise_for_status()
     return resp.json()
 
