@@ -335,6 +335,7 @@ STATUS_LABELS = {
     "future_request": "Future Request",
     "not_started":    "Not Started",
     "in_progress":    "In Progress",
+    "pending":        "Pending",
 }
 
 # ── Step 4: Compact chip labels for KPI colour bar (≤ 8 chars) ───────────────
@@ -344,6 +345,7 @@ STATUS_SHORT = {
     "future_request": "Future",
     "not_started":    "Not Strt",
     "in_progress":    "In Prog",
+    "pending":        "Pending",
 }
 
 # Status → theme colour key (defined in THEME section above)
@@ -353,6 +355,7 @@ STATUS_COLORS = {
     "future_request": "teal",
     "not_started":    "gray",
     "in_progress":    "amber",
+    "pending":        "amber",
 }
 
 # For detail slides (slide 3/4): statuses that roll up to "Completed" (green)

@@ -136,17 +136,11 @@ def _display_status(canonical):
     return canonical, _sl(canonical)
 
 def _app_display_status(app_instances_in_phase):
-    """Aggregate display status for one application's instances in a phase."""
+    """Aggregate display status — two buckets only: Completed or Pending."""
     statuses = [inst.get("status","not_started") for inst in app_instances_in_phase]
-    # If every instance is completed or de-scoped → Completed
     if all(s in config.COMPLETED_STATUSES for s in statuses):
         return "completed", "Completed"
-    # If any is in-progress → In Progress
-    if any(s == "in_progress" for s in statuses):
-        return "in_progress", "Onboarding In Progress"
-    if any(s == "future_request" for s in statuses):
-        return "future_request", "Future Request"
-    return "not_started", "Not Started"
+    return "pending", "Pending"
 
 def _build_phase_rows(applications, phase_summary):
     rows = []
@@ -417,11 +411,11 @@ def build_slide1(prs, phase_rows):
         NX = 0.18 + ni*(NB_W+0.10)
         add_rect(slide, NX, NB_Y, NB_W, NB_H, C.card, C.border, 0.75)
         add_rect(slide, NX, NB_Y, 0.04, NB_H, nc)
-        add_text(slide, title, NX+0.10, NB_Y+0.04, NB_W-0.14, 0.16,
+        add_text(slide, title, NX+0.10, NB_Y+0.04, NB_W-0.14, 0.14,
                  sz=7.5, bold=True, color=nc, va="top")
-        add_text(slide, body,  NX+0.10, NB_Y+0.20, NB_W-0.14, 0.17,
+        add_text(slide, body,  NX+0.10, NB_Y+0.19, NB_W-0.14, 0.18,
                  sz=6.5, color=C.txt_mid, va="top")
-        add_text(slide, ex,    NX+0.10, NB_Y+0.36, NB_W-0.14, 0.11,
+        add_text(slide, ex,    NX+0.10, NB_Y+0.37, NB_W-0.14, 0.10,
                  sz=6, italic=True, color=C.txt_muted, va="top")
 
     # Status legend
@@ -566,11 +560,8 @@ def _build_one_detail_slide(prs, phase, ph_short, ph_color,
 
     add_line(slide, 0.30, 1.18, 9.70, 1.18, C.border, 0.75)
     for cx, lbl, cw in [
-        (C_NUM,  "#",                          0.22),
-        (C_APP,  "Application  ·  Org / Prod / Non-Prod Instances", W_APP),
-        (C_STAT, "Status",                     W_STAT),
-        (C_PROD, "PROD",                       W_PROD),
-        (C_NP,   "NON-PROD",                   W_NP),
+        (C_NUM,  "#",                                              0.22),
+        (C_APP,  "Application  ·  Instance / Prod / Non-Prod",    W_APP),
     ]:
         add_text(slide, lbl, cx, 1.02, cw, 0.17,
                  sz=7, bold=True, color=C.txt_muted, align=PP_ALIGN.LEFT)
@@ -638,10 +629,10 @@ def _build_one_detail_slide(prs, phase, ph_short, ph_color,
             add_text(slide, "—", C_PROD, Y, W_PROD - 0.04, ROW_H-0.03,
                      sz=9, color=C.txt_muted, align=PP_ALIGN.CENTER)
 
-        # NP pill
+        # Non-Prod pill
         if nt > 0:
             pill(slide, C_NP, pill_y, W_NP - 0.04, pill_h,
-                 f"NP {nd}/{nt}", nc, sz=7)
+                 f"Non-Prod {nd}/{nt}", nc, sz=7)
         else:
             add_text(slide, "—", C_NP, Y, W_NP - 0.04, ROW_H-0.03,
                      sz=9, color=C.txt_muted, align=PP_ALIGN.CENTER)
@@ -651,19 +642,17 @@ def _build_one_detail_slide(prs, phase, ph_short, ph_color,
     add_rect(slide, 0.18, NOTE_Y, 9.64, NOTE_H, RGBColor(0xFE,0xF9,0xC3),
              RGBColor(0xCA,0x8A,0x04), 0.75)
     add_rect(slide, 0.18, NOTE_Y, 0.05, NOTE_H, RGBColor(0xCA,0x8A,0x04))
-    add_text(slide, "NOTE",
-             0.30, NOTE_Y+0.03, 0.65, 0.14, sz=7, bold=True,
-             color=RGBColor(0x92,0x40,0x0E), va="top")
+    add_text(slide, "Note:  Status Grouping",
+             0.28, NOTE_Y + 0.03, 9.30, 0.14,
+             sz=7, bold=True, color=RGBColor(0x92,0x40,0x0E), va="top")
     note_body = (
-        "Status Grouping:  "
-        "Completed  =  'Completed' + 'De-Scoped'  (shown in green).   "
-        "Pending  =  'Onboarding In Progress' + 'Not Started' + 'Future Request'  "
-        "(shown with their respective colour).   "
-        "Status is determined by the JIRA dropdown field configured in config.py → STATUS_FIELD."
+        "Completed  =  'Completed' + 'De-Scoped'  (green).     "
+        "Pending  =  'In Progress' + 'Not Started' + 'Future Request'  (amber).     "
+        "Status is read from the JIRA field configured in config.py → STATUS_FIELD."
     )
     add_text(slide, note_body,
-             0.30, NOTE_Y+0.05, 9.30, NOTE_H-0.08, sz=6.5,
-             color=RGBColor(0x78,0x35,0x0F), va="middle")
+             0.28, NOTE_Y + 0.17, 9.30, NOTE_H - 0.20,
+             sz=6.5, color=RGBColor(0x78,0x35,0x0F), va="top")
 
     org_footer(slide)
 
@@ -881,7 +870,7 @@ def build_appendix_slides(prs, appendix_rows):
                     row["app_name"],
                     row["inst_name"],
                     row["app_id"],
-                    row["phase"],
+                    _phase_label(row["phase"]),
                     row["env"],
                     row["sub_key"],
                     None,            # status — drawn as pill
