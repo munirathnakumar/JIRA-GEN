@@ -1,190 +1,306 @@
 # =============================================================================
-# data.py  —  SSPM Slide Data  (manual mode)
+# data.py  —  Manual / fallback data  (used when USE_JIRA = False)
 # =============================================================================
-# Edit this file when USE_JIRA = False in config.py.
-# When USE_JIRA = True this file is IGNORED except for TIER_SUMMARY and MILESTONES.
-#
-# Slide map:
-#   SUMMARY_STATS  → Slide 1  stat bar at top
-#   TIER_TABLE     → Slide 1  top table    (by Priority tier:  P1–P5)
-#   REGION_TABLE   → Slide 1  bottom table (by Region)
-#   P1_APPS        → Slide 2  (P1 detailed rows, no blockers)
-#   P2_APPS        → Slide 3  (P2 grid, no blockers)
-#   TIER_SUMMARY   → Slide 4  (P3/P4/P5 out-of-scope + milestones)
-#   MILESTONES     → Slide 4
-#   P1_BLOCKERS    → Slide 5  (dedicated blockers slide)
-#   S3_BLOCKERS    → Slide 5
-#   P1_APPS        → Slide 6  (8-pane score improvement layout)
+# STATUS values must match one of the keys in config.STATUS_MAPPING:
+#   "completed"      → maps from "Completed" JIRA dropdown
+#   "de_scoped"      → maps from "De-Scoped"
+#   "future_request" → maps from "Future Request"
+#   "not_started"    → maps from "Not Started"
+#   "in_progress"    → maps from "Onboarding In Progress"
 # =============================================================================
 
-
 # =============================================================================
-# SLIDE 1 — Summary Dashboard Data
+# APPLICATIONS  (Phase 1 + Phase 2)
 # =============================================================================
+# Mock data:  18 Phase-1 apps  → 2 detail slides (14 + 4 rows)
+#             32 Phase-2 apps  → 3 detail slides (14 + 14 + 4 rows)
+# All 5 statuses represented across the dataset.
 
-# ── APP_SUMMARY: Unique application counts per tier ───────────────────────────
-# One entry per tier.  "total_apps" = count of unique applications (= Stories).
-# "done"    = apps where all instances are fully onboarded
-# "pending" = apps still in progress or not started
+def _inst(key, summary, phase, status, region, pd, pt, nd, nt):
+    return {"key": key, "summary": summary, "phase": phase, "status": status,
+            "region": region, "prod_done": pd, "prod_total": pt,
+            "non_prod_done": nd, "non_prod_total": nt}
 
-APP_SUMMARY = [
-    {"tier": "P1", "total_apps":  8, "done":  5, "pending": 3},
-    {"tier": "P2", "total_apps": 14, "done":  8, "pending": 6},
-    {"tier": "P3", "total_apps": 30, "done":  0, "pending": 30},
-    {"tier": "P4", "total_apps": 20, "done":  0, "pending": 20},
-    {"tier": "P5", "total_apps": 16, "done":  0, "pending": 16},
-]
+APPLICATIONS = [
 
-# ── INST_SUMMARY: Instance counts per tier ────────────────────────────────────
-# One entry per tier.  Each instance = one Sub-task in the app's Story.
-# "prod_done"  / "prod_pend"  / "prod_total"  : Production instances
-# "np_done"    / "np_pend"    / "np_total"    : Non-Prod instances
-#   Set np_total = 0 if no Non-Prod visibility yet (P3/P4/P5) → shows N/A
+    # ── PHASE 1 ── 18 applications ───────────────────────────────────────────
 
-INST_SUMMARY = [
-    {"tier": "P1", "prod_done": 8, "prod_pend": 3, "prod_total": 11,
-                   "np_done":   3, "np_pend":   2, "np_total":    5},
-    {"tier": "P2", "prod_done":12, "prod_pend": 8, "prod_total": 20,
-                   "np_done":   4, "np_pend":   6, "np_total":   10},
-    {"tier": "P3", "prod_done": 8, "prod_pend":22, "prod_total": 30,
-                   "np_done":   0, "np_pend":   0, "np_total":    0},
-    {"tier": "P4", "prod_done": 4, "prod_pend":16, "prod_total": 20,
-                   "np_done":   0, "np_pend":   0, "np_total":    0},
-    {"tier": "P5", "prod_done": 0, "prod_pend":15, "prod_total": 15,
-                   "np_done":   0, "np_pend":   0, "np_total":    0},
-]
-
-# =============================================================================
-# SLIDE 2 — Region-wise Summary
-# =============================================================================
-# Same instance structure as INST_SUMMARY but grouped by region.
-# "prod_done" / "prod_pend" / "prod_total" : Prod instances in this region
-# "np_done"   / "np_pend"  / "np_total"   : Non-Prod instances (0 = N/A)
-
-REGION_TABLE = [
-    {"region": "APAC",          "prod_done":10, "prod_pend": 8, "prod_total":18,
-                                 "np_done":  3, "np_pend":  4,  "np_total":  7},
-    {"region": "EMEA",          "prod_done": 7, "prod_pend": 6, "prod_total":13,
-                                 "np_done":  2, "np_pend":  3,  "np_total":  5},
-    {"region": "Global",        "prod_done": 5, "prod_pend": 3, "prod_total": 8,
-                                 "np_done":  0, "np_pend":  0,  "np_total":  0},
-    {"region": "Japan",         "prod_done": 3, "prod_pend": 2, "prod_total": 5,
-                                 "np_done":  1, "np_pend":  1,  "np_total":  2},
-    {"region": "North America", "prod_done": 4, "prod_pend": 5, "prod_total": 9,
-                                 "np_done":  0, "np_pend":  3,  "np_total":  3},
-    {"region": "TG",            "prod_done": 2, "prod_pend": 3, "prod_total": 5,
-                                 "np_done":  0, "np_pend":  1,  "np_total":  1},
-]
-
-# =============================================================================
-# Both tables share the SAME column structure:
-#
-#   Status columns (each with Prod + Non-Prod sub-columns):
-#     Completed | Descoped | Future-Request | Not Started | In-Progress | Total
-#
-# Each cell is [Prod_count, NonProd_count].
-# Use 0 where the count is zero. Use None where N/A (no NP environment).
-#
-# "Descoped"       = App was originally in scope, later removed
-# "Future-Request" = App requested for future inclusion, not yet committed
-# =============================================================================
-
-
-# =============================================================================
-# SLIDE 3  —  P1 Applications (detailed, per instance)
-# =============================================================================
-# One entry per app. Each instance: "env" = "Prod"|"Non-Prod", "done" = True|False
-
-P1_APPS = [
-    {"name": "A1", "instances": [
-        {"env": "Prod",     "done": True },
-        {"env": "Prod",     "done": True },
-        {"env": "Prod",     "done": False},
-        {"env": "Non-Prod", "done": True },
-        {"env": "Non-Prod", "done": False},
+    {"name": "Salesforce", "instances": [
+        _inst("SSPM-101","Salesforce - APAC Prod",   "Phase 1","completed",      "APAC",          1,1,1,1),
+        _inst("SSPM-102","Salesforce - APAC DR",     "Phase 1","completed",      "APAC",          1,1,0,1),
+        _inst("SSPM-103","Salesforce - EMEA Prod",   "Phase 1","in_progress",    "EMEA",          0,1,0,1),
+        _inst("SSPM-104","Salesforce - Japan Prod",  "Phase 1","completed",      "Japan",         1,1,1,1),
+        _inst("SSPM-105","Salesforce - NA Prod",     "Phase 1","in_progress",    "North America", 1,1,0,1),
+        _inst("SSPM-106","Salesforce - NA Sandbox",  "Phase 1","not_started",    "North America", 0,1,0,1),
+        _inst("SSPM-107","Salesforce - Global Prod", "Phase 1","completed",      "Global",        1,1,0,0),
+        _inst("SSPM-108","Salesforce - TG Prod",     "Phase 1","de_scoped",      "TG",            0,1,0,0),
     ]},
-    {"name": "A2", "instances": [
-        {"env": "Prod",     "done": True },
-        {"env": "Non-Prod", "done": True },
+    {"name": "Workday", "instances": [
+        _inst("SSPM-201","Workday - APAC Prod",      "Phase 1","completed",      "APAC",          1,1,1,1),
+        _inst("SSPM-202","Workday - EMEA Prod",      "Phase 1","completed",      "EMEA",          1,1,0,1),
+        _inst("SSPM-203","Workday - NA Prod",        "Phase 1","in_progress",    "North America", 0,1,0,1),
     ]},
-    {"name": "A3", "instances": [{"env": "Prod", "done": True }]},
-    {"name": "A4", "instances": [
-        {"env": "Prod",     "done": True },
-        {"env": "Non-Prod", "done": False},
+    {"name": "ServiceNow", "instances": [
+        _inst("SSPM-301","ServiceNow - APAC Prod",   "Phase 1","completed",      "APAC",          1,1,1,1),
+        _inst("SSPM-302","ServiceNow - EMEA Prod",   "Phase 1","in_progress",    "EMEA",          1,1,0,1),
+        _inst("SSPM-303","ServiceNow - NA Prod",     "Phase 1","in_progress",    "North America", 0,1,0,1),
+        _inst("SSPM-304","ServiceNow - Japan Prod",  "Phase 1","completed",      "Japan",         1,1,0,0),
     ]},
-    {"name": "A5", "instances": [{"env": "Prod", "done": True }]},
-    {"name": "A6", "instances": [
-        {"env": "Prod",     "done": True },
-        {"env": "Non-Prod", "done": True },
+    {"name": "GitHub Enterprise", "instances": [
+        _inst("SSPM-401","GitHub Ent - APAC",        "Phase 1","completed",      "APAC",          1,1,1,1),
+        _inst("SSPM-402","GitHub Ent - EMEA",        "Phase 1","completed",      "EMEA",          1,1,1,1),
+        _inst("SSPM-403","GitHub Ent - NA",          "Phase 1","not_started",    "North America", 0,1,0,1),
     ]},
-    {"name": "A7", "instances": [
-        {"env": "Prod", "done": True },
-        {"env": "Prod", "done": False},
+    {"name": "Microsoft 365", "instances": [
+        _inst("SSPM-501","M365 - APAC Prod",         "Phase 1","completed",      "APAC",          1,1,0,0),
+        _inst("SSPM-502","M365 - EMEA Prod",         "Phase 1","completed",      "EMEA",          1,1,0,0),
+        _inst("SSPM-503","M365 - Japan Prod",        "Phase 1","completed",      "Japan",         1,1,0,0),
+        _inst("SSPM-504","M365 - NA Prod",           "Phase 1","in_progress",    "North America", 0,1,0,0),
+        _inst("SSPM-505","M365 - Global Prod",       "Phase 1","not_started",    "Global",        0,1,0,0),
     ]},
-    {"name": "A8", "instances": [{"env": "Prod", "done": False}]},
-]
+    {"name": "Okta", "instances": [
+        _inst("SSPM-601","Okta - APAC Prod",         "Phase 1","completed",      "APAC",          1,1,1,1),
+        _inst("SSPM-602","Okta - NA Prod",           "Phase 1","completed",      "North America", 1,1,1,1),
+        _inst("SSPM-603","Okta - EMEA Prod",         "Phase 1","in_progress",    "EMEA",          0,1,0,1),
+    ]},
+    {"name": "Zoom", "instances": [
+        _inst("SSPM-701","Zoom - Global Prod",       "Phase 1","completed",      "Global",        1,1,0,1),
+        _inst("SSPM-702","Zoom - Japan Prod",        "Phase 1","not_started",    "Japan",         0,1,0,0),
+    ]},
+    {"name": "Slack", "instances": [
+        _inst("SSPM-801","Slack - Global Prod",      "Phase 1","completed",      "Global",        1,1,0,0),
+        _inst("SSPM-802","Slack - APAC Prod",        "Phase 1","in_progress",    "APAC",          0,1,0,1),
+    ]},
+    {"name": "Palo Alto Prisma", "instances": [
+        _inst("SSPM-901","Prisma - APAC Prod",       "Phase 1","completed",      "APAC",          1,1,1,1),
+        _inst("SSPM-902","Prisma - NA Prod",         "Phase 1","completed",      "North America", 1,1,0,1),
+    ]},
+    {"name": "CrowdStrike", "instances": [
+        _inst("SSPM-1001","CrowdStrike - Global",    "Phase 1","in_progress",    "Global",        1,1,0,1),
+    ]},
+    {"name": "Proofpoint", "instances": [
+        _inst("SSPM-1101","Proofpoint - APAC",       "Phase 1","completed",      "APAC",          1,1,0,0),
+        _inst("SSPM-1102","Proofpoint - EMEA",       "Phase 1","completed",      "EMEA",          1,1,0,0),
+        _inst("SSPM-1103","Proofpoint - NA",         "Phase 1","de_scoped",      "North America", 0,1,0,0),
+    ]},
+    {"name": "Mimecast", "instances": [
+        _inst("SSPM-1201","Mimecast - APAC Prod",    "Phase 1","in_progress",    "APAC",          0,1,0,1),
+        _inst("SSPM-1202","Mimecast - EMEA Prod",    "Phase 1","not_started",    "EMEA",          0,1,0,1),
+    ]},
+    {"name": "Qualys", "instances": [
+        _inst("SSPM-1301","Qualys - Global Prod",    "Phase 1","completed",      "Global",        1,1,0,0),
+    ]},
+    {"name": "Rapid7", "instances": [
+        _inst("SSPM-1401","Rapid7 - APAC Prod",      "Phase 1","not_started",    "APAC",          0,1,0,0),
+        _inst("SSPM-1402","Rapid7 - NA Prod",        "Phase 1","not_started",    "North America", 0,1,0,0),
+    ]},
+    {"name": "Tenable", "instances": [
+        _inst("SSPM-1501","Tenable - APAC",          "Phase 1","future_request", "APAC",          0,1,0,0),
+    ]},
+    {"name": "Varonis", "instances": [
+        _inst("SSPM-1601","Varonis - NA Prod",       "Phase 1","de_scoped",      "North America", 0,1,0,0),
+    ]},
+    {"name": "SailPoint", "instances": [
+        _inst("SSPM-1701","SailPoint - APAC",        "Phase 1","future_request", "APAC",          0,1,0,1),
+        _inst("SSPM-1702","SailPoint - EMEA",        "Phase 1","not_started",    "EMEA",          0,1,0,1),
+    ]},
+    {"name": "BeyondTrust", "instances": [
+        _inst("SSPM-1801","BeyondTrust - Global",    "Phase 1","not_started",    "Global",        0,1,0,0),
+    ]},
 
-P1_BLOCKERS = [
-    {"id": "B1", "text": "A1 — Prod instance access provisioning pending IT approval",  "owner": "IT Ops",    "impact": "High"},
-    {"id": "B2", "text": "A7 — Prod instance API unreachable, firewall change raised",  "owner": "Network",   "impact": "High"},
-    {"id": "B3", "text": "A4 — Non-Prod tenant config not shared by app owner",         "owner": "App Owner", "impact": "Med" },
+    # ── PHASE 2 ── 32 applications ───────────────────────────────────────────
+
+    {"name": "Box", "instances": [
+        _inst("SSPM-2001","Box - APAC Prod",         "Phase 2","in_progress",    "APAC",          1,1,0,1),
+        _inst("SSPM-2002","Box - EMEA Prod",         "Phase 2","not_started",    "EMEA",          0,1,0,1),
+        _inst("SSPM-2003","Box - NA Prod",           "Phase 2","not_started",    "North America", 0,1,0,1),
+    ]},
+    {"name": "Dropbox", "instances": [
+        _inst("SSPM-2101","Dropbox - APAC Prod",     "Phase 2","not_started",    "APAC",          0,1,0,0),
+        _inst("SSPM-2102","Dropbox - NA Prod",       "Phase 2","not_started",    "North America", 0,1,0,0),
+    ]},
+    {"name": "Atlassian (Jira/Confluence)", "instances": [
+        _inst("SSPM-2201","Atlassian - APAC Prod",   "Phase 2","in_progress",    "APAC",          1,1,0,1),
+        _inst("SSPM-2202","Atlassian - EMEA Prod",   "Phase 2","not_started",    "EMEA",          0,1,0,1),
+        _inst("SSPM-2203","Atlassian - NA Prod",     "Phase 2","not_started",    "North America", 0,1,0,1),
+    ]},
+    {"name": "Zendesk", "instances": [
+        _inst("SSPM-2301","Zendesk - APAC Prod",     "Phase 2","not_started",    "APAC",          0,1,0,1),
+        _inst("SSPM-2302","Zendesk - Global Prod",   "Phase 2","not_started",    "Global",        0,1,0,0),
+    ]},
+    {"name": "DocuSign", "instances": [
+        _inst("SSPM-2401","DocuSign - APAC Prod",    "Phase 2","in_progress",    "APAC",          1,1,0,1),
+        _inst("SSPM-2402","DocuSign - NA Prod",      "Phase 2","not_started",    "North America", 0,1,0,1),
+    ]},
+    {"name": "HubSpot", "instances": [
+        _inst("SSPM-2501","HubSpot - APAC Prod",     "Phase 2","not_started",    "APAC",          0,1,0,1),
+        _inst("SSPM-2502","HubSpot - NA Prod",       "Phase 2","not_started",    "North America", 0,1,0,0),
+    ]},
+    {"name": "Tableau / Salesforce Analytics", "instances": [
+        _inst("SSPM-2601","Tableau - APAC Prod",     "Phase 2","in_progress",    "APAC",          1,1,0,1),
+        _inst("SSPM-2602","Tableau - EMEA Prod",     "Phase 2","not_started",    "EMEA",          0,1,0,1),
+        _inst("SSPM-2603","Tableau - NA Prod",       "Phase 2","not_started",    "North America", 0,1,0,0),
+    ]},
+    {"name": "Coupa", "instances": [
+        _inst("SSPM-2701","Coupa - APAC Prod",       "Phase 2","not_started",    "APAC",          0,1,0,1),
+        _inst("SSPM-2702","Coupa - NA Prod",         "Phase 2","de_scoped",      "North America", 0,1,0,0),
+    ]},
+    {"name": "Snowflake", "instances": [
+        _inst("SSPM-2801","Snowflake - APAC Prod",   "Phase 2","not_started",    "APAC",          0,1,0,1),
+        _inst("SSPM-2802","Snowflake - NA Prod",     "Phase 2","not_started",    "North America", 0,1,0,1),
+    ]},
+    {"name": "Splunk", "instances": [
+        _inst("SSPM-2901","Splunk - Global Prod",    "Phase 2","in_progress",    "Global",        1,1,0,1),
+    ]},
+    {"name": "Ariba / SAP", "instances": [
+        _inst("SSPM-3001","Ariba - APAC Prod",       "Phase 2","not_started",    "APAC",          0,1,0,1),
+        _inst("SSPM-3002","Ariba - EMEA Prod",       "Phase 2","not_started",    "EMEA",          0,1,0,1),
+    ]},
+    {"name": "Veeva Vault", "instances": [
+        _inst("SSPM-3101","Veeva - APAC Prod",       "Phase 2","future_request", "APAC",          0,1,0,0),
+        _inst("SSPM-3102","Veeva - NA Prod",         "Phase 2","future_request", "North America", 0,1,0,0),
+    ]},
+    {"name": "Workiva", "instances": [
+        _inst("SSPM-3201","Workiva - Global Prod",   "Phase 2","not_started",    "Global",        0,1,0,0),
+    ]},
+    {"name": "NetSuite", "instances": [
+        _inst("SSPM-3301","NetSuite - APAC Prod",    "Phase 2","not_started",    "APAC",          0,1,0,0),
+        _inst("SSPM-3302","NetSuite - NA Prod",      "Phase 2","not_started",    "North America", 0,1,0,0),
+    ]},
+    {"name": "Anaplan", "instances": [
+        _inst("SSPM-3401","Anaplan - APAC Prod",     "Phase 2","future_request", "APAC",          0,1,0,0),
+    ]},
+    {"name": "Concur (SAP)", "instances": [
+        _inst("SSPM-3501","Concur - Global Prod",    "Phase 2","not_started",    "Global",        0,1,0,0),
+    ]},
+    {"name": "Adobe Sign", "instances": [
+        _inst("SSPM-3601","Adobe Sign - APAC",       "Phase 2","not_started",    "APAC",          0,1,0,1),
+        _inst("SSPM-3602","Adobe Sign - NA",         "Phase 2","not_started",    "North America", 0,1,0,1),
+    ]},
+    {"name": "SuccessFactors", "instances": [
+        _inst("SSPM-3701","SuccessFactors - APAC",   "Phase 2","not_started",    "APAC",          0,1,0,0),
+        _inst("SSPM-3702","SuccessFactors - EMEA",   "Phase 2","not_started",    "EMEA",          0,1,0,0),
+    ]},
+    {"name": "Darktrace", "instances": [
+        _inst("SSPM-3801","Darktrace - APAC Prod",   "Phase 2","in_progress",    "APAC",          1,1,0,1),
+    ]},
+    {"name": "Elastic (ELK)", "instances": [
+        _inst("SSPM-3901","Elastic - Global Prod",   "Phase 2","not_started",    "Global",        0,1,0,1),
+    ]},
+    {"name": "PagerDuty", "instances": [
+        _inst("SSPM-4001","PagerDuty - Global",      "Phase 2","future_request", "Global",        0,1,0,0),
+    ]},
+    {"name": "Dynatrace", "instances": [
+        _inst("SSPM-4101","Dynatrace - APAC Prod",   "Phase 2","not_started",    "APAC",          0,1,0,1),
+        _inst("SSPM-4102","Dynatrace - NA Prod",     "Phase 2","not_started",    "North America", 0,1,0,1),
+    ]},
+    {"name": "Miro", "instances": [
+        _inst("SSPM-4201","Miro - Global Prod",      "Phase 2","de_scoped",      "Global",        0,1,0,0),
+    ]},
+    {"name": "Figma", "instances": [
+        _inst("SSPM-4301","Figma - Global Prod",     "Phase 2","not_started",    "Global",        0,1,0,0),
+    ]},
+    {"name": "Notion", "instances": [
+        _inst("SSPM-4401","Notion - Global Prod",    "Phase 2","future_request", "Global",        0,1,0,0),
+    ]},
+    {"name": "monday.com", "instances": [
+        _inst("SSPM-4501","monday.com - APAC",       "Phase 2","not_started",    "APAC",          0,1,0,0),
+    ]},
+    {"name": "Asana", "instances": [
+        _inst("SSPM-4601","Asana - Global Prod",     "Phase 2","not_started",    "Global",        0,1,0,0),
+    ]},
+    {"name": "Jira Service Mgmt", "instances": [
+        _inst("SSPM-4701","JSM - APAC Prod",         "Phase 2","in_progress",    "APAC",          1,1,0,1),
+        _inst("SSPM-4702","JSM - NA Prod",           "Phase 2","not_started",    "North America", 0,1,0,1),
+    ]},
+    {"name": "Freshdesk", "instances": [
+        _inst("SSPM-4801","Freshdesk - APAC Prod",   "Phase 2","not_started",    "APAC",          0,1,0,0),
+    ]},
+    {"name": "Intercom", "instances": [
+        _inst("SSPM-4901","Intercom - Global",       "Phase 2","future_request", "Global",        0,1,0,0),
+    ]},
+    {"name": "Twilio", "instances": [
+        _inst("SSPM-5001","Twilio - APAC Prod",      "Phase 2","not_started",    "APAC",          0,1,0,0),
+        _inst("SSPM-5002","Twilio - NA Prod",        "Phase 2","not_started",    "North America", 0,1,0,0),
+    ]},
+    {"name": "SendGrid", "instances": [
+        _inst("SSPM-5101","SendGrid - Global",       "Phase 2","de_scoped",      "Global",        0,1,0,0),
+    ]},
 ]
 
 
 # =============================================================================
-# SLIDE 3  —  P2 Applications (summary counts)
+# PHASE SUMMARY  (out-of-scope phases — summary row only, no detail slides)
 # =============================================================================
 
-P2_APPS = [
-    {"name": "A1",  "prod_done": 1, "prod_total": 1, "np_done": 0, "np_total": 1},
-    {"name": "A2",  "prod_done": 1, "prod_total": 1, "np_done": 0, "np_total": 2},
-    {"name": "A3",  "prod_done": 1, "prod_total": 1, "np_done": 1, "np_total": 1},
-    {"name": "A4",  "prod_done": 1, "prod_total": 1, "np_done": 0, "np_total": 1},
-    {"name": "A5",  "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 1},
-    {"name": "A6",  "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 0},
-    {"name": "A7",  "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 1},
-    {"name": "A8",  "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 1},
-    {"name": "A9",  "prod_done": 1, "prod_total": 1, "np_done": 0, "np_total": 1},
-    {"name": "A10", "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 0},
-    {"name": "A11", "prod_done": 1, "prod_total": 1, "np_done": 0, "np_total": 1},
-    {"name": "A12", "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 0},
-    {"name": "A13", "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 0},
-    {"name": "A14", "prod_done": 0, "prod_total": 1, "np_done": 0, "np_total": 0},
+PHASE_SUMMARY = {
+    "Phase 3": {"total_apps": 143, "prod_done": 12, "prod_total": 143, "np_done": 0, "np_total": 0, "in_scope": False},
+    "Phase 4": {"total_apps": 198, "prod_done":  4, "prod_total": 198, "np_done": 0, "np_total": 0, "in_scope": False},
+    "Phase 5": {"total_apps": 182, "prod_done":  0, "prod_total": 182, "np_done": 0, "np_total": 0, "in_scope": False},
+}
+
+
+# =============================================================================
+# BLOCKERS
+# =============================================================================
+
+BLOCKERS = [
+    {"id": "B1", "key": "SSPM-9001", "text": "Salesforce EMEA — Prod tenant access pending IT Ops approval",       "owner": "IT Ops",    "impact": "High", "phase": "Phase 1"},
+    {"id": "B2", "key": "SSPM-9002", "text": "ServiceNow NA — API endpoint unreachable, firewall change raised",    "owner": "Network",   "impact": "High", "phase": "Phase 1"},
+    {"id": "B3", "key": "SSPM-9003", "text": "Workday NA — Non-Prod tenant config not shared by app owner",         "owner": "App Owner", "impact": "Med",  "phase": "Phase 1"},
+    {"id": "B4", "key": "SSPM-9004", "text": "Box EMEA — Licence procurement approval pending Finance sign-off",    "owner": "Finance",   "impact": "Med",  "phase": "Phase 2"},
+    {"id": "B5", "key": "SSPM-9005", "text": "Atlassian — Prod API key rotation blocking SSPM connector config",    "owner": "Platform",  "impact": "High", "phase": "Phase 2"},
 ]
 
 
 # =============================================================================
-# SLIDE 4  —  Out-of-Scope Tiers, Milestones & Blockers
+# MILESTONES
 # =============================================================================
-
-TIER_SUMMARY = [
-    {"tier": "P3", "total": "~30", "prod_done": "8",  "prod_pending": "~22", "color": "purple"},
-    {"tier": "P4", "total": "~20", "prod_done": "4",  "prod_pending": "~16", "color": "teal"  },
-    {"tier": "P5", "total": "~15", "prod_done": "0",  "prod_pending": "~15", "color": "gray"  },
-]
 
 MILESTONES = [
     {
-        "name": "Phase 2 · Auto-Ticketing Integration", "status": "In Progress", "color": "amber",
-        "tasks": [
-            {"task": "SSPM → ServiceNow connector design & build", "status": "In Progress"},
-            {"task": "Ticket template, SLA & assignment routing",  "status": "Not Started"},
-            {"task": "UAT, pilot & go-live",                       "status": "Not Started"},
+        "name"  : "Phase 2 · Auto-Ticketing Integration",
+        "status": "in_progress",
+        "phase" : "Phase 2",
+        "tasks" : [
+            {"task": "SSPM → ServiceNow connector: requirements & design",  "status": "completed"},
+            {"task": "Connector build — Phase 1 apps (P1 scope)",            "status": "completed"},
+            {"task": "Connector build — Phase 2 apps (P2 scope)",            "status": "in_progress"},
+            {"task": "Ticket template design (fields, SLA, priority rules)", "status": "in_progress"},
+            {"task": "Assignment routing rules & escalation matrix",          "status": "not_started"},
+            {"task": "UAT — internal SSPM team validation",                  "status": "not_started"},
+            {"task": "UAT — app owner pilot (10 apps)",                      "status": "not_started"},
+            {"task": "Runbook: auto-ticket lifecycle SOP",                   "status": "not_started"},
+            {"task": "Load & performance testing",                           "status": "not_started"},
+            {"task": "Go-live & hypercare (2-week window)",                  "status": "not_started"},
         ],
     },
     {
-        "name": "Phase 3 · Scorecard & Operationalisation", "status": "Not Started", "color": "purple",
-        "tasks": [
-            {"task": "Define KPIs, scoring framework & dashboard", "status": "Not Started"},
-            {"task": "Runbook, SOP & SSPM operating model (BAU)",  "status": "Not Started"},
-            {"task": "App owner reporting cadence & BAU handover", "status": "Not Started"},
+        "name"  : "Phase 3 · Scorecard & Operationalisation",
+        "status": "not_started",
+        "phase" : "Phase 3",
+        "tasks" : [
+            {"task": "Define KPIs and scoring framework",                    "status": "not_started"},
+            {"task": "Build SSPM health dashboard (Power BI / Tableau)",     "status": "not_started"},
+            {"task": "App owner reporting template & cadence",               "status": "not_started"},
+            {"task": "Runbook & SOP documentation",                         "status": "not_started"},
+            {"task": "SSPM operating model (BAU) sign-off",                 "status": "not_started"},
+            {"task": "BAU handover to operations team",                     "status": "not_started"},
+            {"task": "Post-go-live review & lessons learned",               "status": "not_started"},
+            {"task": "Hypercare exit criteria & sign-off",                  "status": "not_started"},
         ],
     },
-]
-
-S3_BLOCKERS = [
-    {"id": "B1", "text": "A1 (P1) — Prod instance access provisioning pending IT Ops approval", "owner": "IT Ops",    "impact": "High", "phase": "Phase 1"},
-    {"id": "B2", "text": "A7 (P1) — Prod instance API unreachable, firewall change raised",     "owner": "Network",   "impact": "High", "phase": "Phase 1"},
-    {"id": "B3", "text": "ServiceNow connector design blocked — ITSM team bandwidth",            "owner": "ITSM Team", "impact": "High", "phase": "Phase 2"},
-    {"id": "B4", "text": "Scorecard KPI framework pending Security Architecture approval",       "owner": "Sec Arch",  "impact": "Med",  "phase": "Phase 3"},
+    {
+        "name"  : "Phase 4 · Continuous Improvement & Expansion",
+        "status": "not_started",
+        "phase" : "Phase 4",
+        "tasks" : [
+            {"task": "Review Phase 3/4 app onboarding backlog",             "status": "not_started"},
+            {"task": "Automated risk-scoring model v2",                     "status": "not_started"},
+            {"task": "Integration with PAM / IAM tooling",                  "status": "not_started"},
+            {"task": "Expanded SSPM coverage: Phase 4 apps (198 apps)",     "status": "not_started"},
+            {"task": "Quarterly review cadence with steering committee",    "status": "not_started"},
+            {"task": "Audit & compliance reporting package",                "status": "not_started"},
+        ],
+    },
 ]

@@ -1,167 +1,294 @@
 # SSPM PPT Generator
 
-Automatically generates a 3-slide PowerPoint deck showing SSPM integration
-status across P1 and P2 applications. Data can be entered manually or pulled
-live from JIRA.
+Generates a PowerPoint status deck from JIRA data (or a local mock dataset).
 
 ---
 
-## Files in this folder
+## Files
 
 | File | Purpose | Edit? |
 |---|---|---|
-| `config.py` | Settings: output filename, JIRA connection, colours | ✅ Yes — your main config |
-| `data.py` | Slide content when not using JIRA | ✅ Yes — update before each presentation |
-| `generator.py` | Builds the PowerPoint slides | ❌ No — do not edit |
-| `jira_loader.py` | Fetches and transforms JIRA data | ❌ No — do not edit |
-| `find_jira_fields.py` | Tool to discover your JIRA custom field names | ❌ No — just run it once |
+| `config.py` | **All settings** — JIRA connection, JQL, field mappings, status labels | ✅ Yes — main config |
+| `data.py` | Mock/manual data used when `USE_JIRA = False` | ✅ Yes — for testing |
+| `generator.py` | Builds the PowerPoint slides | ❌ Do not edit |
+| `jira_loader.py` | Fetches and transforms live JIRA data | ❌ Do not edit |
+| `find_jira_fields.py` | Discovers JIRA custom field keys (run once) | ❌ Just run it |
 
 ---
 
-## Quick Start (Manual Data — No JIRA)
-
-### Step 1 — Install Python dependency
+## Quick Start
 
 ```bash
-pip install python-pptx
+pip install python-pptx requests
+python generator.py          # produces SSPM_Status.pptx
 ```
-
-### Step 2 — Update your data
-
-Open `data.py` and edit the app lists and blockers to reflect current status.
-Each section has comments explaining exactly what to fill in.
-
-### Step 3 — Run the generator
-
-```bash
-python generator.py
-```
-
-This creates `SSPM_Status_Light.pptx` in the same folder.
 
 ---
 
-## JIRA Integration
+## config.py — Section by Section
 
-Follow these steps once to wire the generator to your JIRA project.
-After setup, every run will automatically pull live data.
-
-### Step 1 — Get a JIRA API token
-
-1. Go to: https://id.atlassian.com
-2. Click **Security** → **Create and manage API tokens**
-3. Click **Create API token**, give it a name (e.g. "SSPM PPT Generator")
-4. Copy the token — you will only see it once
-
-### Step 2 — Update config.py
-
-Open `config.py` and fill in:
+### Section 1 — Output filename
 
 ```python
-USE_JIRA       = True                           # Switch on JIRA mode
-JIRA_BASE_URL  = "https://yourcompany.atlassian.net"
-JIRA_EMAIL     = "you@yourcompany.com"
-JIRA_API_TOKEN = "paste-your-token-here"
-JIRA_PROJECT   = "SSPM"                         # Your project key
+OUTPUT_FILE = "SSPM_Status.pptx"
 ```
 
-### Step 3 — Discover your custom field names
+---
 
-Your JIRA instance uses auto-generated IDs for custom fields
-(e.g. `customfield_10045`). Run this once to find them:
+### Section 2 — JIRA connection
+
+```python
+USE_JIRA       = False                             # True = live JIRA, False = data.py mock
+JIRA_BASE_URL  = "https://yourcompany.atlassian.net"
+JIRA_EMAIL     = "you@yourcompany.com"
+JIRA_API_TOKEN = "YOUR_API_TOKEN_HERE"
+```
+
+Get an API token: **https://id.atlassian.com → Security → API tokens → Create**
+
+---
+
+### Section 3 — Two JQL queries
+
+```python
+JQL_STORIES  = 'project = "SSPM" AND issuetype = Story ORDER BY created ASC'
+JQL_SUBTASKS = 'project = "SSPM" AND issuetype = Sub-task ORDER BY created ASC'
+```
+
+- **JQL_STORIES** — one Story = one SaaS instance (e.g. Salesforce APAC Prod).
+  Stories with the same application name are grouped together.
+- **JQL_SUBTASKS** — each sub-task under a story = one Prod or Non-Prod environment.
+
+JQL may contain spaces — that is normal.
+JIRA field names that have spaces must be quoted **inside** the JQL string:
+
+```
+"Epic Link" = SSPM-10          ✅  field name with space — quoted inside JQL
+project = "MY PROJECT"         ✅  project name with space — quoted inside JQL
+customfield_10042 = "Phase 1"  ✅  values with spaces are fine
+```
+
+---
+
+### Section 4 — Application grouping
+
+Controls how stories are grouped into one application block (e.g. all Salesforce stories → one Salesforce row).
+
+```python
+APPLICATION_GROUPING = "epic_name"   # recommended
+```
+
+| Option | Behaviour |
+|--------|-----------|
+| `"epic_name"` | Group by the Epic the story belongs to |
+| `"custom_field"` | Group by a custom field (set `APPLICATION_FIELD = "customfield_XXXXX"`) |
+| `"label"` | Group by the first JIRA label |
+| `"component"` | Group by the first JIRA component |
+| `"summary_prefix"` | Split story summary on `APPLICATION_SUMMARY_SEPARATOR` (e.g. `" - "`) |
+
+---
+
+### Section 5 — Phase identification
+
+```python
+PHASE_FIELD  = "customfield_XXXXX"     # field KEY from find_jira_fields.py
+PHASE_VALUES = ["Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5"]
+```
+
+Run `python find_jira_fields.py SSPM-001` to find the correct field key.
+
+---
+
+### Section 6 — Project status field
+
+```python
+STATUS_FIELD = "status"    # built-in JIRA status, OR "customfield_XXXXX"
+```
+
+Raw JIRA values are mapped to one of 5 internal statuses via `STATUS_MAPPING` (Section 10b below).
+
+---
+
+### Section 7 — Region field
+
+```python
+REGION_FIELD = "customfield_XXXXX"
+REGIONS      = ["APAC", "EMEA", "Global", "Japan", "North America", "TG"]
+```
+
+---
+
+### Section 8 — Prod vs Non-Prod (from sub-tasks)
+
+```python
+INSTANCE_TYPE_FIELD   = "customfield_XXXXX"    # field on each sub-task
+INSTANCE_TYPE_MAPPING = {
+    "prod":     ["Production", "Prod", "PRD"],
+    "non_prod": ["Non-Production", "Non-Prod", "UAT", "Staging", "Dev"],
+}
+```
+
+If the field is absent, set `INSTANCE_TYPE_FROM_SUMMARY = True` to infer type from keywords in the sub-task title.
+
+---
+
+### Section 10b — Status mapping *(most commonly edited)*
+
+This is the 4-step pipeline that converts raw JIRA dropdown text into what appears in the deck.
+
+#### Step 2 — STATUS_MAPPING: Map raw JIRA value → internal key
+
+Add every exact dropdown value your JIRA project uses. Matching is **case-insensitive**.
+The 5 internal key names on the left are fixed — only edit the lists on the right.
+
+```python
+STATUS_MAPPING = {
+    "completed":      ["Completed", "Done", "Closed"],
+    "de_scoped":      ["De-Scoped", "Cancelled", "Won't Do"],
+    "future_request": [
+        "Future Request",
+        "Future Request - Integration Not currently Supported",  # long JIRA value — add as-is
+    ],
+    "not_started":    ["Not Started", "To Do", "Backlog", "Open"],
+    "in_progress":    [
+        "Onboarding In Progress",    # exact JIRA dropdown text
+        "In Progress", "In Development",
+    ],
+}
+```
+
+#### Step 3 — STATUS_LABELS: PPT pill labels (shown on detail slides)
+
+Edit the right-hand values. These appear inside status pills on slides 3+.
+**Keep ≤ 20 characters** — pills are narrow.
+
+```python
+STATUS_LABELS = {
+    "completed":      "Completed",
+    "de_scoped":      "De-Scoped",
+    "future_request": "Future Request",
+    "not_started":    "Not Started",
+    "in_progress":    "In Progress",      # short label, not the full JIRA string
+}
+```
+
+#### Step 4 — STATUS_SHORT: KPI bar chip labels (Slide 1)
+
+These appear in the tiny chip row under the colour bar on Slide 1.
+**Must be ≤ 8 characters** to avoid overlap.
+
+```python
+STATUS_SHORT = {
+    "completed":      "Done",
+    "de_scoped":      "D-Scoped",
+    "future_request": "Future",
+    "not_started":    "Not Strt",
+    "in_progress":    "In Prog",
+}
+```
+
+---
+
+### Section 9 — Blockers slide JQL
+
+```python
+EXTRA_SECTIONS = {
+    "blockers": {
+        "jql": 'project = SSPM AND labels = "blocker" ORDER BY priority DESC',
+        # Other options:
+        # '"Epic Link" = SSPM-99 ORDER BY created ASC'
+        # 'project = SSPM AND issuetype = "Impediment"'
+        # 'project = SSPM AND "Blocker Flag" = Yes'
+        ...
+    },
+```
+
+Set `jql = ""` to skip the Blockers slide entirely.
+
+Also set the field keys for impact and phase on each blocker issue:
+
+```python
+        "fields": {
+            "owner_field":  "assignee",           # built-in — keep as-is
+            "impact_field": "customfield_XXXXX",  # High / Med / Low dropdown field
+            "phase_field":  "customfield_XXXXX",  # same key as PHASE_FIELD
+        },
+```
+
+---
+
+### Section 9 — Milestones slide JQL
+
+```python
+    "milestones": {
+        "jql": '"Epic Link" = SSPM-20 ORDER BY key ASC',
+        # Other options:
+        # 'project = SSPM AND labels = "milestone" ORDER BY duedate ASC'
+        # 'project = SSPM AND issuetype = Epic ORDER BY created ASC'
+        ...
+    },
+```
+
+- Each issue returned becomes **one milestone section** header.
+- Its sub-tasks automatically become the **task rows** below.
+- Task count is **fully dynamic** — 5 tasks or 50 tasks, the slide auto-paginates.
+- Set `jql = ""` to skip the Milestones slide.
+
+Also set the field keys for phase, target date, and status:
+
+```python
+        "fields": {
+            "phase_field":  "customfield_XXXXX",  # same key as PHASE_FIELD
+            "target_field": "customfield_XXXXX",  # target date or sprint field
+            "status_field": "status",             # or a custom field key
+        },
+```
+
+---
+
+### Section 11 — Detail slide scope
+
+```python
+IN_SCOPE_PHASES       = ["Phase 1", "Phase 2"]  # phases that get full detail slides
+ROWS_PER_DETAIL_SLIDE = 6                        # apps per page (6–10 recommended)
+```
+
+---
+
+## Slide structure
+
+| Slide | Content |
+|-------|---------|
+| 1 | Summary dashboard — phase KPI cards + instance onboarding table |
+| 2 | Region-wise summary table |
+| 3…N | Phase 1 detail — auto-paginated at `ROWS_PER_DETAIL_SLIDE` apps/page |
+| N+1…M | Phase 2 detail — auto-paginated |
+| M+1 | Blockers & Impediments |
+| M+2 | Milestones & Roadmap |
+
+Each detail slide shows per-application:
+- **3 mini-boxes**: ×instances (total orgs) / ×Prod / ×Non-Prod counts
+- **Status pill**: Completed+De-Scoped → green "Completed"; others show their own label
+- **PROD done/total** and **NP done/total** progress pills
+
+---
+
+## Field key discovery
 
 ```bash
 python find_jira_fields.py SSPM-001
 ```
 
-Replace `SSPM-001` with any real issue key from your project.
-
-This prints every field on that issue. Look for the ones marked `◄ CUSTOM`
-and match them to their meaning (Prod instances completed, Non-Prod total etc.).
-
-Example output:
+Output:
 
 ```
-FIELD KEY                           VALUE
-----------------------------------------------------------------------
-  customfield_10042                 3              ◄ CUSTOM
-  customfield_10043                 5              ◄ CUSTOM
-  customfield_10044                 Yes            ◄ CUSTOM
-  customfield_10045                 High           ◄ CUSTOM
-  priority                          Highest
-  status                            In Progress
+FIELD KEY (paste into config.py)     DISPLAY NAME         CURRENT VALUE
+customfield_10042                    Phase Name           Phase 1   ◄ HAS VALUE
+customfield_10085                    Region               APAC      ◄ HAS VALUE
+customfield_10091                    Integration Status   Onboarding In Progress  ◄ HAS VALUE
 ```
 
-### Step 4 — Map fields in config.py
-
-Update the `JIRA_FIELDS` section in `config.py` with the field names you found:
-
-```python
-JIRA_FIELDS = {
-    "priority"              : "tier",
-    "status"                : "onboard_status",
-    "customfield_10042"     : "prod_done",      # No. of Prod instances completed
-    "customfield_10043"     : "prod_total",     # Total Prod instances
-    "customfield_10044"     : "is_blocker",     # "Yes" / "No"
-    "customfield_10045"     : "impact",         # "High" / "Med" / "Low"
-    # add np_done, np_total, owner, phase similarly
-}
-```
-
-### Step 5 — Run
-
-```bash
-python generator.py
-```
-
-The generator will print what it fetches and then save the deck.
-
----
-
-## What JIRA provides vs what stays in data.py
-
-Even with JIRA enabled, two things always come from `data.py`:
-
-| Item | Why it stays manual |
-|---|---|
-| `TIER_SUMMARY` (P3/P4/P5 table) | These tiers are out of scope — no JIRA tickets yet |
-| `MILESTONES` (Phase 2, Phase 3 tasks) | Editorial content, not tracked per ticket |
-
-Everything else — P1 apps, P2 apps, and blockers — comes from JIRA.
-
----
-
-## Updating data manually (no JIRA)
-
-Make sure `USE_JIRA = False` in `config.py`, then edit `data.py`:
-
-**To add a new P1 app:**
-```python
-{"name": "A9", "instances": [
-    {"env": "Prod",     "done": True },
-    {"env": "Non-Prod", "done": False},
-]},
-```
-
-**To mark an instance as completed:**
-Change `"done": False` to `"done": True`.
-
-**To add a blocker:**
-```python
-{"id": "B4", "text": "Description of blocker", "owner": "Team Name", "impact": "High"},
-```
-
-**To update a milestone task status:**
-Change `"status"` to `"Completed"`, `"In Progress"`, or `"Not Started"`.
-
----
-
-## Changing the output filename
-
-In `config.py`:
-```python
-OUTPUT_FILE = "SSPM_Weekly_Update.pptx"
-```
+Copy the **FIELD KEY** (left column) into `config.py`. Never paste the display name as a key.
 
 ---
 
@@ -169,8 +296,10 @@ OUTPUT_FILE = "SSPM_Weekly_Update.pptx"
 
 | Problem | Fix |
 |---|---|
-| `ModuleNotFoundError: pptx` | Run `pip install python-pptx` |
+| `ModuleNotFoundError: pptx` | `pip install python-pptx` |
 | `401 Unauthorized` from JIRA | Check `JIRA_EMAIL` and `JIRA_API_TOKEN` in config.py |
-| `404 Not Found` from JIRA | Check `JIRA_PROJECT` and `JIRA_BASE_URL` in config.py |
-| Custom field always shows 0 | Run `find_jira_fields.py` and re-check the field name |
-| Deck looks the same after editing | Make sure you saved `data.py` before running |
+| `404 Not Found` from JIRA | Check `JIRA_BASE_URL` and issue key in `find_jira_fields.py` |
+| Status always shows "Not Started" | Add the exact JIRA dropdown text to `STATUS_MAPPING` |
+| Text overlapping in pills | Shorten `STATUS_LABELS` values; shorten `STATUS_SHORT` to ≤ 8 chars |
+| Too many detail slides | Increase `ROWS_PER_DETAIL_SLIDE` in config.py |
+| Custom field always 0 | Re-run `find_jira_fields.py` and verify the field key |

@@ -1,25 +1,33 @@
 # =============================================================================
-# jira_loader.py  —  JIRA Data Fetcher
+# jira_loader.py  —  JIRA Data Fetcher  (re-wired architecture)
 # =============================================================================
-# Called automatically by generator.py when USE_JIRA = True in config.py.
-# Fetches issues from JIRA and transforms them into the same data shape
-# that data.py uses — so the slide builder never needs to change.
+# Called by generator.py when USE_JIRA = True.
+# Uses two JQL queries from config.py:
+#   JQL_STORIES  → one Story per SaaS instance; grouped by application
+#   JQL_SUBTASKS → sub-tasks identify Prod vs Non-Prod environment per instance
 #
-# You should NOT need to edit this file unless your JIRA custom field
-# names differ from what is set in config.py → JIRA_FIELDS.
+# Returns a dict matching the structure of data.py APPLICATIONS.
 # =============================================================================
 
 import requests
 from requests.auth import HTTPBasicAuth
+
 from config import (
     JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN,
-    JIRA_PROJECT, JIRA_FIELDS,
-    JIRA_PRIORITY_TO_TIER, JIRA_STATUS_MAP
+    JQL_STORIES, JQL_SUBTASKS,
+    APPLICATION_GROUPING, APPLICATION_FIELD, APPLICATION_SUMMARY_SEPARATOR,
+    PHASE_FIELD,
+    STATUS_FIELD, STATUS_MAPPING,
+    REGION_FIELD,
+    INSTANCE_TYPE_FIELD, INSTANCE_TYPE_MAPPING,
+    INSTANCE_TYPE_FROM_SUMMARY, SUBTASK_DONE_STATUSES,
+    INSTANCE_COUNT_FIELDS,
+    EXTRA_SECTIONS,
 )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Internal helpers
+# HTTP helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _auth():
@@ -29,203 +37,283 @@ def _headers():
     return {"Accept": "application/json"}
 
 def _get(url, params=None):
-    """Make a JIRA REST API GET request and return parsed JSON."""
     resp = requests.get(url, headers=_headers(), auth=_auth(), params=params)
     resp.raise_for_status()
     return resp.json()
 
-def _field(issue, field_key):
+def _field(issue, key):
     """Safely read a field from a JIRA issue dict."""
-    return issue.get("fields", {}).get(field_key)
+    return (issue.get("fields") or {}).get(key)
 
-def _map_status(jira_status_name):
-    return JIRA_STATUS_MAP.get(jira_status_name, "Not Started")
-
-def _map_tier(jira_priority_name):
-    return JIRA_PRIORITY_TO_TIER.get(jira_priority_name, "P5")
+def _field_value(raw):
+    """Extract a string value from a JIRA field (handles dict, string, None)."""
+    if raw is None:
+        return ""
+    if isinstance(raw, dict):
+        return raw.get("value") or raw.get("name") or raw.get("displayName") or ""
+    return str(raw)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 1: Discover custom field IDs (run find_jira_fields.py for this)
+# Paginated JQL search
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_all_issues(tier_filter=None):
+def _fetch_all(jql, extra_fields=""):
     """
-    Fetch all SSPM issues from JIRA.
-    tier_filter: "P1" | "P2" | None (fetch all)
-
-    Returns a list of raw JIRA issue dicts.
+    Execute a JQL query and return ALL matching issues (auto-paginated).
+    jql may contain spaces and quoted field names — passed as-is to the API.
     """
-    # Build JQL query
-    priority_map = {v: k for k, v in JIRA_PRIORITY_TO_TIER.items()}
-    if tier_filter and tier_filter in priority_map:
-        jql = f'project = {JIRA_PROJECT} AND priority = "{priority_map[tier_filter]}" ORDER BY key ASC'
-    else:
-        jql = f'project = {JIRA_PROJECT} ORDER BY priority ASC, key ASC'
+    if not jql:
+        return []
 
-    url    = f"{JIRA_BASE_URL}/rest/api/3/search"
-    issues = []
-    start  = 0
+    url = f"{JIRA_BASE_URL}/rest/api/3/search"
+    base = "summary,status,assignee,parent,subtasks"
+    fields = f"{base},{extra_fields}" if extra_fields else base
 
-    # JIRA paginates at 100 per page — loop until all are fetched
+    issues, start = [], 0
     while True:
         data = _get(url, params={
-            "jql"        : jql,
-            "startAt"    : start,
-            "maxResults" : 100,
-            "fields"     : "summary,status,priority," + ",".join(JIRA_FIELDS.keys()),
+            "jql"       : jql,
+            "startAt"   : start,
+            "maxResults": 100,
+            "fields"    : fields,
         })
-        issues.extend(data["issues"])
-        start += len(data["issues"])
-        if start >= data["total"]:
+        batch = data.get("issues", [])
+        issues.extend(batch)
+        start += len(batch)
+        if start >= data.get("total", 0):
             break
 
-    print(f"  Fetched {len(issues)} issues from JIRA project '{JIRA_PROJECT}'")
     return issues
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2: Transform raw JIRA issues → P1_APPS format (Slide 1)
+# Field extractors
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_p1_apps(issues):
-    """
-    Build the P1_APPS list from JIRA issues.
-    Each issue = one app.  Prod/NP counts come from custom fields.
-    """
-    p1_apps = []
-    for idx, issue in enumerate(issues, start=1):
-        priority_name = (_field(issue, "priority") or {}).get("name", "")
-        if _map_tier(priority_name) != "P1":
-            continue
+def _get_application(issue):
+    """Determine which application a story belongs to."""
+    if APPLICATION_GROUPING == "epic_name":
+        epic = _field(issue, "epic") or {}
+        return epic.get("name") or epic.get("summary") or "Unknown"
 
-        prod_done  = int(_field(issue, JIRA_FIELDS["customfield_prod_done"])  or 0)
-        prod_total = int(_field(issue, JIRA_FIELDS["customfield_prod_total"]) or 0)
-        np_done    = int(_field(issue, JIRA_FIELDS["customfield_np_done"])    or 0)
-        np_total   = int(_field(issue, JIRA_FIELDS["customfield_np_total"])   or 0)
+    if APPLICATION_GROUPING == "custom_field":
+        return _field_value(_field(issue, APPLICATION_FIELD)) or "Unknown"
 
-        # Build one instance entry per Prod slot and per NP slot
-        instances = []
-        for n in range(prod_total):
-            instances.append({"env": "Prod",     "done": n < prod_done})
-        for n in range(np_total):
-            instances.append({"env": "Non-Prod", "done": n < np_done})
+    if APPLICATION_GROUPING == "label":
+        labels = _field(issue, "labels") or []
+        return labels[0] if labels else "Unknown"
 
-        p1_apps.append({
-            "name"     : f"A{idx}",          # Replace with issue["key"] if you want real keys
-            "instances": instances,
-        })
+    if APPLICATION_GROUPING == "component":
+        comps = _field(issue, "components") or []
+        return comps[0].get("name", "Unknown") if comps else "Unknown"
 
-    return p1_apps
+    if APPLICATION_GROUPING == "summary_prefix":
+        summary = _field(issue, "summary") or ""
+        sep = APPLICATION_SUMMARY_SEPARATOR
+        if sep in summary:
+            return summary.split(sep)[0].strip()
+        return summary.split()[0] if summary else "Unknown"
+
+    return "Unknown"
 
 
-def build_p1_blockers(issues):
-    """
-    Build the P1_BLOCKERS list.
-    Issues are treated as blockers if the blocker custom field = "Yes".
-    """
-    blockers = []
-    idx = 1
-    for issue in issues:
-        is_blocker = _field(issue, JIRA_FIELDS["customfield_blocker"])
-        if str(is_blocker).lower() not in ("yes", "true", "1"):
-            continue
-
-        priority_name = (_field(issue, "priority") or {}).get("name", "")
-        if _map_tier(priority_name) != "P1":
-            continue
-
-        impact = _field(issue, JIRA_FIELDS["customfield_impact"]) or "Med"
-        owner  = _field(issue, JIRA_FIELDS["customfield_owner"])  or "TBD"
-        summary = (issue.get("fields") or {}).get("summary", "No description")
-
-        blockers.append({
-            "id"    : f"B{idx}",
-            "text"  : summary,
-            "owner" : owner,
-            "impact": impact,
-        })
-        idx += 1
-
-    return blockers
+def _get_phase(issue):
+    return _field_value(_field(issue, PHASE_FIELD)) or ""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Step 3: Transform → P2_APPS format (Slide 2)
-# ─────────────────────────────────────────────────────────────────────────────
+def _get_region(issue):
+    return _field_value(_field(issue, REGION_FIELD)) or "Unknown"
 
-def build_p2_apps(issues):
-    """Build the P2_APPS list from JIRA issues."""
-    p2_apps = []
-    idx = 1
-    for issue in issues:
-        priority_name = (_field(issue, "priority") or {}).get("name", "")
-        if _map_tier(priority_name) != "P2":
-            continue
 
-        prod_done  = int(_field(issue, JIRA_FIELDS["customfield_prod_done"])  or 0)
-        prod_total = int(_field(issue, JIRA_FIELDS["customfield_prod_total"]) or 1)
-        np_done    = int(_field(issue, JIRA_FIELDS["customfield_np_done"])    or 0)
-        np_total   = int(_field(issue, JIRA_FIELDS["customfield_np_total"])   or 0)
+def _map_status(issue):
+    """Map a story's JIRA status to one of: completed|in_progress|backlog|de_scoped."""
+    if STATUS_FIELD == "status":
+        raw = (_field(issue, "status") or {}).get("name", "")
+    else:
+        raw = _field_value(_field(issue, STATUS_FIELD))
 
-        p2_apps.append({
-            "name"      : f"A{idx}",
-            "prod_done" : prod_done,
-            "prod_total": prod_total,
-            "np_done"   : np_done,
-            "np_total"  : np_total,
-        })
-        idx += 1
+    val_lower = raw.lower()
+    for canonical, values in STATUS_MAPPING.items():
+        if any(v.lower() == val_lower for v in values):
+            return canonical
+    return "backlog"
 
-    return p2_apps
+
+def _get_instance_type(subtask):
+    """Return "prod" or "non_prod" for a Sub-task."""
+    if INSTANCE_TYPE_FROM_SUMMARY:
+        summary = (_field(subtask, "summary") or "").lower()
+        for kw in ["non-prod", "nonprod", "non_prod", "uat", "staging", "dev", "test", "sandbox"]:
+            if kw in summary:
+                return "non_prod"
+        return "prod"
+
+    raw = _field_value(_field(subtask, INSTANCE_TYPE_FIELD))
+    raw_lower = raw.lower()
+    for canonical, values in INSTANCE_TYPE_MAPPING.items():
+        if any(v.lower() == raw_lower for v in values):
+            return canonical
+    return "prod"
+
+
+def _subtask_done(subtask):
+    status = (_field(subtask, "status") or {}).get("name", "")
+    return status in SUBTASK_DONE_STATUSES
+
+
+def _instance_counts_from_fields(story):
+    """Fallback: read Prod/NP counts from number custom fields on the Story."""
+    def _num(key):
+        v = _field(story, INSTANCE_COUNT_FIELDS.get(key, ""))
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+    return {
+        "prod_done"      : _num("prod_done"),
+        "prod_total"     : _num("prod_total"),
+        "non_prod_done"  : _num("non_prod_done"),
+        "non_prod_total" : _num("non_prod_total"),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4: Build S3 blockers across all phases
+# Build field list strings for API requests
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_s3_blockers(issues):
-    """Build the cross-phase blockers for Slide 3."""
-    blockers = []
-    idx = 1
-    for issue in issues:
-        is_blocker = _field(issue, JIRA_FIELDS["customfield_blocker"])
-        if str(is_blocker).lower() not in ("yes", "true", "1"):
-            continue
+def _story_extra_fields():
+    fields = [PHASE_FIELD, REGION_FIELD]
+    if STATUS_FIELD != "status":
+        fields.append(STATUS_FIELD)
+    if APPLICATION_GROUPING == "custom_field":
+        fields.append(APPLICATION_FIELD)
+    if APPLICATION_GROUPING == "epic_name":
+        fields.append("epic")
+    if APPLICATION_GROUPING == "label":
+        fields.append("labels")
+    if APPLICATION_GROUPING == "component":
+        fields.append("components")
+    # instance count fields (used when no sub-tasks)
+    for f in INSTANCE_COUNT_FIELDS.values():
+        if f and f != "customfield_XXXXX":
+            fields.append(f)
+    return ",".join(f for f in fields if f and f != "customfield_XXXXX")
 
-        impact  = _field(issue, JIRA_FIELDS["customfield_impact"]) or "Med"
-        owner   = _field(issue, JIRA_FIELDS["customfield_owner"])  or "TBD"
-        phase   = _field(issue, JIRA_FIELDS["customfield_phase"])  or "Phase 1"
-        summary = (issue.get("fields") or {}).get("summary", "No description")
 
-        blockers.append({
-            "id"    : f"B{idx}",
-            "text"  : summary,
-            "owner" : owner,
-            "impact": impact,
-            "phase" : phase,
-        })
-        idx += 1
-
-    return blockers
+def _subtask_extra_fields():
+    if INSTANCE_TYPE_FIELD and INSTANCE_TYPE_FIELD != "customfield_XXXXX":
+        return INSTANCE_TYPE_FIELD
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main entry point — called by generator.py
+# Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_from_jira():
     """
-    Fetch all data from JIRA and return it in the same shape as data.py.
-    Returns a dict with keys: p1_apps, p1_blockers, p2_apps, s3_blockers.
-    TIER_SUMMARY and MILESTONES are not in JIRA — they come from data.py always.
+    Fetch data from JIRA using the two JQL queries defined in config.py.
+
+    Returns:
+    {
+        "applications": [
+            {
+                "name": "Salesforce",
+                "instances": [
+                    {
+                        "key":           "SSPM-101",
+                        "summary":       "Salesforce - APAC Prod",
+                        "phase":         "Phase 1",
+                        "status":        "completed",   # completed|in_progress|backlog|de_scoped
+                        "region":        "APAC",
+                        "prod_done":     1,
+                        "prod_total":    1,
+                        "non_prod_done": 0,
+                        "non_prod_total":1,
+                    },
+                    ...
+                ]
+            },
+            ...
+        ],
+        "extra_sections": {
+            "blockers":   [ ...raw JIRA issue dicts... ],
+            "milestones": [ ...raw JIRA issue dicts... ],
+        }
+    }
     """
     print("Connecting to JIRA...")
-    issues = fetch_all_issues()
 
+    # ── Fetch stories ─────────────────────────────────────────────────────────
+    print(f"  Fetching stories:  {JQL_STORIES[:80]}...")
+    stories = _fetch_all(JQL_STORIES, extra_fields=_story_extra_fields())
+    print(f"  → {len(stories)} stories")
+
+    # ── Fetch sub-tasks (if JQL_SUBTASKS configured) ──────────────────────────
+    use_subtasks = bool(JQL_SUBTASKS)
+    subtasks_by_parent = {}
+
+    if use_subtasks:
+        print(f"  Fetching subtasks: {JQL_SUBTASKS[:80]}...")
+        subtasks = _fetch_all(JQL_SUBTASKS, extra_fields=_subtask_extra_fields())
+        print(f"  → {len(subtasks)} subtasks")
+
+        for st in subtasks:
+            parent_key = ((_field(st, "parent") or {}).get("key") or "")
+            if parent_key:
+                subtasks_by_parent.setdefault(parent_key, []).append(st)
+
+    # ── Group stories by application ──────────────────────────────────────────
+    apps_dict = {}
+
+    for story in stories:
+        app_name = _get_application(story)
+        story_key = story.get("key", "")
+
+        if use_subtasks:
+            story_subtasks = subtasks_by_parent.get(story_key, [])
+            prod_sts  = [s for s in story_subtasks if _get_instance_type(s) == "prod"]
+            np_sts    = [s for s in story_subtasks if _get_instance_type(s) == "non_prod"]
+            counts = {
+                "prod_done"      : sum(1 for s in prod_sts if _subtask_done(s)),
+                "prod_total"     : len(prod_sts),
+                "non_prod_done"  : sum(1 for s in np_sts  if _subtask_done(s)),
+                "non_prod_total" : len(np_sts),
+            }
+        else:
+            counts = _instance_counts_from_fields(story)
+
+        instance = {
+            "key"    : story_key,
+            "summary": _field(story, "summary") or "",
+            "phase"  : _get_phase(story),
+            "status" : _map_status(story),
+            "region" : _get_region(story),
+            **counts,
+        }
+
+        apps_dict.setdefault(app_name, []).append(instance)
+
+    applications = [
+        {"name": name, "instances": instances}
+        for name, instances in sorted(apps_dict.items())
+    ]
+    print(f"  → {len(applications)} applications identified")
+
+    # ── Fetch extra sections ──────────────────────────────────────────────────
+    extra_sections = {}
+    for section_key, cfg in EXTRA_SECTIONS.items():
+        jql = cfg.get("jql", "")
+        if jql:
+            print(f"  Fetching {section_key}: {jql[:60]}...")
+            extra_sections[section_key] = _fetch_all(jql)
+            print(f"  → {len(extra_sections[section_key])} issues")
+        else:
+            extra_sections[section_key] = []
+
+    print("JIRA data loaded.\n")
     return {
-        "p1_apps"     : build_p1_apps(issues),
-        "p1_blockers" : build_p1_blockers(issues),
-        "p2_apps"     : build_p2_apps(issues),
-        "s3_blockers" : build_s3_blockers(issues),
+        "applications"  : applications,
+        "extra_sections": extra_sections,
     }

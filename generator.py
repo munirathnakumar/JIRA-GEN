@@ -1,15 +1,16 @@
 # =============================================================================
-# generator.py  —  SSPM PPT Slide Builder  (do not edit)
+# generator.py  —  SSPM PPT Slide Builder
 # =============================================================================
 # Slides produced:
-#   1 — Summary Dashboard  (stat bar + Tier table + Region table)
-#   2 — P1 Applications    (detailed rows, NO blockers)
-#   3 — P2 Applications    (4-col grid,   NO blockers)
-#   4 — Milestones & Out-of-Scope overview (NO blockers)
-#   5 — Blockers           (dedicated slide)
-#   6 — P1 Score Improvement (8-pane screenshot layout)
+#   1     — Summary Dashboard  (phase KPI strip + instances table + notes)
+#   2     — Region-wise Summary
+#   3…N   — Phase 1 Detail  (DYNAMIC: 14 apps/slide, auto-paginated)
+#   N+1…M — Phase 2 Detail  (DYNAMIC: same)
+#   M+1   — Blockers
+#   M+2   — Milestones
 # =============================================================================
 
+import math
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
@@ -25,9 +26,13 @@ def _rgb(k):
 class C: pass
 for _k in config.THEME: setattr(C, _k, _rgb(_k))
 
-STATUS_COLOR  = {"Completed":C.green,"In Progress":C.amber,"Not Started":C.gray,"Planned":C.gray}
-TIER_COLOR_MAP= {"purple":C.purple,"teal":C.teal,"amber":C.amber,"green":C.green,"gray":C.gray}
-SLIDE_W, SLIDE_H = 10.0, 5.625
+SLIDE_W, SLIDE_H  = 10.0, 5.625
+CONTENT_BOTTOM    = 5.32   # usable height above footer
+PHASE_PALETTE     = [C.accent, C.green, C.purple, C.teal, C.gray]
+
+# All canonical statuses in display order
+ALL_STATUSES = ["completed", "in_progress", "not_started", "future_request", "de_scoped"]
+
 
 # ── Primitives ────────────────────────────────────────────────────────────────
 def i(v): return Inches(v)
@@ -36,15 +41,15 @@ def add_rect(slide, x, y, w, h, fill, border=None, bw=0.75):
     s = slide.shapes.add_shape(1, i(x), i(y), i(w), i(h))
     s.fill.solid(); s.fill.fore_color.rgb = fill
     if border: s.line.color.rgb = border; s.line.width = Pt(bw)
-    else:       s.line.fill.background()
+    else:      s.line.fill.background()
     return s
 
 def add_text(slide, text, x, y, w, h, sz=9, bold=False, color=None,
-             align=PP_ALIGN.LEFT, va="middle", italic=False):
+             align=PP_ALIGN.LEFT, va="middle", italic=False, wrap=True):
     tb = slide.shapes.add_textbox(i(x), i(y), i(w), i(h))
-    tf = tb.text_frame; tf.word_wrap = True; tf.auto_size = None
-    tf.vertical_anchor = {"middle":MSO_ANCHOR.MIDDLE,"top":MSO_ANCHOR.TOP,
-                           "bottom":MSO_ANCHOR.BOTTOM}.get(va, MSO_ANCHOR.MIDDLE)
+    tf = tb.text_frame; tf.word_wrap = wrap; tf.auto_size = None
+    tf.vertical_anchor = {"middle": MSO_ANCHOR.MIDDLE, "top": MSO_ANCHOR.TOP,
+                           "bottom": MSO_ANCHOR.BOTTOM}.get(va, MSO_ANCHOR.MIDDLE)
     p = tf.paragraphs[0]; p.alignment = align
     r = p.add_run(); r.text = str(text)
     r.font.size = Pt(sz); r.font.bold = bold; r.font.italic = italic
@@ -55,7 +60,8 @@ def add_line(slide, x1, y1, x2, y2, color=None, width=0.5):
     ln.line.color.rgb = color or C.border; ln.line.width = Pt(width)
 
 def pill(slide, x, y, w, h, label, color, sz=7.5):
-    light = RGBColor(min(color[0]+210,255), min(color[1]+210,255), min(color[2]+210,255))
+    r, g, b = color[0], color[1], color[2]
+    light = RGBColor(min(r+210,255), min(g+210,255), min(b+210,255))
     add_rect(slide, x, y, w, h, light, color, 0.75)
     add_text(slide, label, x, y, w, h, sz=sz, bold=True, color=color, align=PP_ALIGN.CENTER)
 
@@ -65,17 +71,12 @@ def mini_pill(slide, label, done, total, col, x, y, w=1.75):
     add_text(slide, label, x+0.08, y+0.03, w-0.16, 0.16, sz=7, bold=True, color=C.txt_muted, va="top")
     add_text(slide, f"{done}/{total}", x+0.08, y+0.16, w-0.16, 0.20, sz=13, bold=True, color=col, va="middle")
     add_rect(slide, x+0.08, y+H-0.07, w-0.16, 0.04, C.border)
-    if total>0 and done>0:
+    if total > 0 and done > 0:
         add_rect(slide, x+0.08, y+H-0.07, max(0.05,(done/total)*(w-0.16)), 0.04, col)
 
-def stat_card(slide, x, y, w, h, label, value, sub, color):
-    """Single KPI stat card with large number."""
-    add_rect(slide, x, y, w, h, C.card, C.border, 0.75)
-    add_rect(slide, x, y, 0.06, h, color)
-    add_text(slide, label, x+0.12, y+0.04, w-0.16, 0.18, sz=7.5, bold=True, color=C.txt_muted, va="top")
-    add_text(slide, value, x+0.12, y+0.20, w-0.16, 0.26, sz=18, bold=True, color=color, va="middle")
-    if sub:
-        add_text(slide, sub, x+0.12, y+0.46, w-0.16, 0.14, sz=6.5, color=C.txt_muted, va="top")
+def section_label(slide, text, y):
+    add_text(slide, text, 0.18, y, 9.64, 0.18, sz=7.5, bold=True, color=C.txt_muted, va="middle")
+    add_line(slide, 0.18, y+0.18, 9.82, y+0.18, C.border, 0.5)
 
 def header(slide, subtitle, badge=None):
     add_rect(slide, 0, 0, SLIDE_W, 0.60, C.header)
@@ -84,594 +85,681 @@ def header(slide, subtitle, badge=None):
              0.28, 0.06, 8.3, 0.48, sz=13, bold=True, color=C.white, va="middle")
     if badge:
         add_rect(slide, 8.7, 0.09, 1.10, 0.42, C.accent)
-        add_text(slide, badge, 8.7, 0.09, 1.10, 0.42, sz=9, bold=True,
-                 color=C.white, align=PP_ALIGN.CENTER)
+        add_text(slide, badge, 8.7, 0.09, 1.10, 0.42,
+                 sz=9, bold=True, color=C.white, align=PP_ALIGN.CENTER)
 
-def org_footer_space(slide):
-    """Leaves the bottom 0.28 inches blank with a faint placeholder."""
+def org_footer(slide):
     add_rect(slide, 0, 5.345, SLIDE_W, 0.28, C.card_alt)
     add_text(slide, "[ Add your org footer here ]",
              0.3, 5.35, 9.4, 0.25, sz=7, italic=True,
              color=C.border, align=PP_ALIGN.CENTER)
 
-def overall_status(app):
-    insts = app["instances"]; done = sum(1 for x in insts if x["done"])
-    if done==len(insts): return "Completed"
-    if done==0:          return "Not Started"
-    return "In Progress"
+def _phase_color(phase_label):
+    try:   return PHASE_PALETTE[config.PHASE_VALUES.index(phase_label) % len(PHASE_PALETTE)]
+    except ValueError: return C.gray
+
+def _sc(status): return _rgb(config.STATUS_COLORS.get(status, "gray"))
+def _sl(status): return config.STATUS_LABELS.get(status, status.replace("_"," ").title())
 
 
-# =============================================================================
-# SLIDE 1 — Summary Dashboard  (Apps KPI strip + Instances table + Notes)
-# =============================================================================
-def build_slide1(prs, app_summary, inst_summary):
-    """
-    app_summary  : list of tier dicts — unique app counts per tier
-    inst_summary : list of tier dicts — instance counts (prod + np) per tier
-    """
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
-    header(slide, "SSPM Integration — Summary Dashboard")
+# ── Status bar helper (5 segments) ───────────────────────────────────────────
+def _draw_status_bar(slide, x, y, w, h, counts, total):
+    """Draw a proportional 5-segment colour bar from a status-count dict."""
+    if total == 0: return
+    cx = x
+    for st in ALL_STATUSES:
+        n = counts.get(st, 0)
+        if n <= 0: continue
+        seg_w = max(0.01, (n / total) * w)
+        add_rect(slide, cx, y, seg_w, h, _sc(st))
+        cx += seg_w
 
-    TIER_COLORS = {
-        "P1": C.accent,  "P2": C.green,
-        "P3": C.purple,  "P4": C.teal,  "P5": C.gray,
-    }
-    SCOPE_TIERS = {"P1", "P2"}
 
-    # ── Section label: Unique Apps ────────────────────────────────────────────
-    CY = 0.66
-    add_text(slide, "UNIQUE APPLICATIONS — BY PRIORITY TIER",
-             0.18, CY, 9.64, 0.18,
-             sz=7.5, bold=True, color=C.txt_muted, va="middle")
-    add_line(slide, 0.18, CY+0.18, 9.82, CY+0.18, C.border, 0.5)
+# ── Data helpers ──────────────────────────────────────────────────────────────
 
-    # ── Apps KPI strip ────────────────────────────────────────────────────────
-    CY += 0.22
-    # Grand-total card (slightly wider) + 5 tier cards
-    STRIP_H   = 0.70
-    TOTAL_W   = 1.50
-    TIER_W    = (9.64 - TOTAL_W - 0.30) / 5   # remaining width split equally
-    GAP       = 0.06
+def _map_status_value(raw_val):
+    """Map a raw JIRA dropdown string → canonical status key."""
+    v = str(raw_val or "").lower().strip()
+    for canonical, synonyms in config.STATUS_MAPPING.items():
+        if any(s.lower() == v for s in synonyms):
+            return canonical
+    return "not_started"
 
-    # Grand total card
-    total_apps = sum(r.get("total_apps", 0) for r in app_summary)
-    inscope    = sum(r.get("total_apps", 0) for r in app_summary if r["tier"] in SCOPE_TIERS)
-    add_rect(slide, 0.18, CY, TOTAL_W, STRIP_H, C.header, C.header)
-    add_rect(slide, 0.18, CY, 0.05, STRIP_H, C.accent)
-    add_text(slide, "All Tiers", 0.30, CY+0.04, TOTAL_W-0.16, 0.16,
-             sz=7, bold=True, color=RGBColor(0x7d,0xd3,0xfc), va="top")
-    add_text(slide, str(total_apps), 0.30, CY+0.18, TOTAL_W-0.16, 0.30,
-             sz=26, bold=True, color=C.white, va="middle")
-    add_text(slide, f"{inscope} in-scope", 0.30, CY+0.52, TOTAL_W-0.16, 0.16,
-             sz=7, color=RGBColor(0x94,0xa3,0xb8), va="top")
+def _display_status(canonical):
+    """For detail-slide rows: completed+de_scoped → 'Completed', others keep label."""
+    if canonical in config.COMPLETED_STATUSES:
+        return "completed", "Completed"
+    return canonical, _sl(canonical)
 
-    # Per-tier cards
-    for ci, row in enumerate(app_summary):
-        X    = 0.18 + TOTAL_W + GAP + ci*(TIER_W + GAP)
-        tc   = TIER_COLORS.get(row["tier"], C.gray)
-        done = row.get("done", 0)
-        pend = row.get("pending", 0)
-        in_s = row["tier"] in SCOPE_TIERS
+def _app_display_status(app_instances_in_phase):
+    """Aggregate display status for one application's instances in a phase."""
+    statuses = [inst.get("status","not_started") for inst in app_instances_in_phase]
+    # If every instance is completed or de-scoped → Completed
+    if all(s in config.COMPLETED_STATUSES for s in statuses):
+        return "completed", "Completed"
+    # If any is in-progress → In Progress
+    if any(s == "in_progress" for s in statuses):
+        return "in_progress", "Onboarding In Progress"
+    if any(s == "future_request" for s in statuses):
+        return "future_request", "Future Request"
+    return "not_started", "Not Started"
 
-        add_rect(slide, X, CY, TIER_W, STRIP_H, C.card, C.border, 0.75)
-        add_rect(slide, X, CY, 0.05, STRIP_H, tc)
+def _build_phase_rows(applications, phase_summary):
+    rows = []
+    for ph in config.PHASE_VALUES:
+        ph_apps  = [a for a in applications
+                    if any(inst["phase"] == ph for inst in a["instances"])]
 
-        # IN/OUT SCOPE badge
-        badge_bg = RGBColor(0xdc,0xfc,0xe7) if in_s else RGBColor(0xf1,0xf5,0xf9)
-        badge_fc = RGBColor(0x16,0x65,0x34) if in_s else RGBColor(0x47,0x55,0x69)
-        add_rect(slide, X+TIER_W-1.02, CY+0.04, 0.98, 0.16, badge_bg)
-        add_text(slide, "IN SCOPE" if in_s else "OUT OF SCOPE",
-                 X+TIER_W-1.02, CY+0.04, 0.98, 0.16,
-                 sz=5.5, bold=True, color=badge_fc, align=PP_ALIGN.CENTER, va="middle")
+        if ph_apps:
+            ph_insts = [inst for a in ph_apps for inst in a["instances"] if inst["phase"]==ph]
+            st_counts = {s: sum(1 for inst in ph_insts if inst.get("status") == s)
+                         for s in ALL_STATUSES}
+            total_inst = len(ph_insts)
+            rows.append({
+                "phase":      ph,
+                "total_apps": len(ph_apps),
+                "prod_done":  sum(inst.get("prod_done",0)      for inst in ph_insts),
+                "prod_pend":  sum(inst.get("prod_total",0) - inst.get("prod_done",0) for inst in ph_insts),
+                "prod_total": sum(inst.get("prod_total",0)     for inst in ph_insts),
+                "np_done":    sum(inst.get("non_prod_done",0)  for inst in ph_insts),
+                "np_pend":    sum(inst.get("non_prod_total",0) - inst.get("non_prod_done",0) for inst in ph_insts),
+                "np_total":   sum(inst.get("non_prod_total",0) for inst in ph_insts),
+                "st_counts":  st_counts,
+                "total_inst": total_inst,
+                "in_scope":   ph in config.IN_SCOPE_PHASES,
+            })
+        elif ph in phase_summary:
+            ps = phase_summary[ph]
+            pd, pt = ps.get("prod_done",0), ps.get("prod_total",0)
+            rows.append({
+                "phase": ph, "total_apps": ps.get("total_apps",0),
+                "prod_done": pd, "prod_pend": pt-pd, "prod_total": pt,
+                "np_done": 0, "np_pend": 0, "np_total": 0,
+                "st_counts": {"completed": pd, "in_progress":0,
+                              "not_started": pt-pd, "future_request":0, "de_scoped":0},
+                "total_inst": pt,
+                "in_scope": ps.get("in_scope", False),
+            })
+    return rows
 
-        add_text(slide, row["tier"],  X+0.10, CY+0.04, 0.5, 0.16,
-                 sz=8, bold=True, color=tc, va="top")
-        add_text(slide, str(row.get("total_apps", 0)),
-                 X+0.10, CY+0.18, TIER_W-0.15, 0.28,
-                 sz=24, bold=True, color=tc, va="middle")
-        add_text(slide, "Unique Apps", X+0.10, CY+0.46, TIER_W-0.15, 0.14,
-                 sz=6.5, color=C.txt_muted, va="top")
-        add_text(slide, f"{done} done  ·  {pend} pending",
-                 X+0.10, CY+0.56, TIER_W-0.15, 0.13,
-                 sz=6, color=C.txt_muted, va="top")
+def _build_region_rows(applications):
+    region_map = {}
+    for a in applications:
+        for inst in a["instances"]:
+            r = inst.get("region","Unknown")
+            m = region_map.setdefault(r, {"prod_done":0,"prod_pend":0,"prod_total":0,
+                                          "np_done":0,"np_pend":0,"np_total":0})
+            m["prod_done"]  += inst.get("prod_done",0)
+            m["prod_pend"]  += inst.get("prod_total",0)  - inst.get("prod_done",0)
+            m["prod_total"] += inst.get("prod_total",0)
+            m["np_done"]    += inst.get("non_prod_done",0)
+            m["np_pend"]    += inst.get("non_prod_total",0) - inst.get("non_prod_done",0)
+            m["np_total"]   += inst.get("non_prod_total",0)
+    ordered = [r for r in config.REGIONS if r in region_map]
+    ordered += [r for r in region_map if r not in ordered]
+    return [{"region": r, "region_lbl": r, **region_map[r]} for r in ordered]
 
-    # ── Section label: Instances ──────────────────────────────────────────────
-    CY += STRIP_H + 0.10
-    add_text(slide, "INSTANCES — PROD & NON-PROD ONBOARDING STATUS",
-             0.18, CY, 9.64, 0.18,
-             sz=7.5, bold=True, color=C.txt_muted, va="middle")
-    add_line(slide, 0.18, CY+0.18, 9.82, CY+0.18, C.border, 0.5)
-    CY += 0.22
 
-    # ── Instances table ───────────────────────────────────────────────────────
-    TX, TW = 0.18, 9.64
-    LW     = 0.60   # row-label column
-    # 3 groups: Prod(3 sub) | NP(3 sub) | Grand(2 sub)  = 8 sub-columns
-    N_PROD, N_NP, N_GRAND = 3, 3, 2
-    N_SUB  = N_PROD + N_NP + N_GRAND
-    SUB_W  = (TW - LW) / N_SUB
-    GH     = 0.195  # group header height
-    SH2    = 0.155  # sub-header height
-    DR     = 0.205  # data row height
+# ── Instances table (shared by Slide 1 and Slide 2) ──────────────────────────
 
-    # Group headers
+def _draw_instances_table(slide, rows, label_key, label_w, CY,
+                           label_color_fn=None, has_np_fn=None):
+    TX, TW  = 0.18, 9.64
+    N_SUB   = 8          # 3 Prod + 3 NP + 2 Grand
+    SUB_W   = (TW - label_w) / N_SUB
+    GH, SH2, DR = 0.195, 0.155, 0.205
+
     grp_defs = [
-        ("Prod Instances",    N_PROD,  RGBColor(0x06,0x5a,0x8a)),
-        ("Non-Prod Instances",N_NP,    RGBColor(0x04,0x60,0x4a)),
-        ("Grand Total",       N_GRAND, RGBColor(0x2d,0x2d,0x6a)),
+        ("Prod Instances",     3, RGBColor(0x06,0x5a,0x8a)),
+        ("Non-Prod Instances", 3, RGBColor(0x04,0x60,0x4a)),
+        ("Grand Total",        2, RGBColor(0x2d,0x2d,0x6a)),
     ]
-    gx = TX + LW
-    # Tier label header cell
-    add_rect(slide, TX, CY, LW, GH+SH2, C.header)
+    add_rect(slide, TX, CY, label_w, GH+SH2, C.header)
     add_rect(slide, TX, CY, 0.04, GH+SH2, C.accent)
-    add_text(slide, "Tier", TX+0.08, CY, LW-0.10, GH+SH2,
-             sz=8, bold=True, color=C.white, va="middle")
-    for grp_lbl, n_cols, grp_col in grp_defs:
-        gw = n_cols * SUB_W
-        add_rect(slide, gx, CY, gw-0.02, GH, grp_col)
-        add_text(slide, grp_lbl, gx, CY, gw-0.02, GH,
+    add_text(slide, label_key.replace("_lbl","").capitalize(),
+             TX+0.08, CY, label_w-0.10, GH+SH2, sz=8, bold=True, color=C.white, va="middle")
+    gx = TX + label_w
+    for glbl, ncols, gcol in grp_defs:
+        gw = ncols * SUB_W
+        add_rect(slide, gx, CY, gw-0.02, GH, gcol)
+        add_text(slide, glbl, gx, CY, gw-0.02, GH,
                  sz=7.5, bold=True, color=C.white, align=PP_ALIGN.CENTER, va="middle")
-        # Sub-headers
-        sub_labels = (["Completed","Pending","Total"] if n_cols==3
-                      else ["Instances","Done"])
-        for si, sl in enumerate(sub_labels):
+        sub_lbls = ["Completed","Pending","Total"] if ncols==3 else ["Instances","Done"]
+        for si, sl in enumerate(sub_lbls):
             SX = gx + si*SUB_W
             add_rect(slide, SX, CY+GH, SUB_W-0.01, SH2, C.card_alt, C.border, 0.4)
             add_text(slide, sl, SX, CY+GH, SUB_W-0.01, SH2,
                      sz=6, bold=True, color=C.txt_muted, align=PP_ALIGN.CENTER, va="middle")
         gx += gw
 
-    # Data rows
-    for ri, row in enumerate(inst_summary):
+    for ri, row in enumerate(rows):
         RY  = CY + GH + SH2 + ri*DR
         bg  = C.card if ri%2==0 else C.card_alt
-        tc  = TIER_COLORS.get(row["tier"], C.gray)
+        tc  = label_color_fn(row) if label_color_fn else C.accent
         add_rect(slide, TX, RY, TW, DR, bg, C.border, 0.4)
         add_rect(slide, TX, RY, 0.04, DR, tc)
-        add_text(slide, row["tier"], TX+0.08, RY, LW-0.10, DR,
+        add_text(slide, row[label_key], TX+0.08, RY, label_w-0.10, DR,
                  sz=8.5, bold=True, color=tc, va="middle")
 
         pd = row.get("prod_done",0); pp = row.get("prod_pend",0); pt = row.get("prod_total",0)
-        nd = row.get("np_done",0);   np_ = row.get("np_pend",0); nt = row.get("np_total",0)
-        has_np = (nt > 0)
-        gt  = (pt + nt) if has_np else f"{pt}+"
-        gd  = pd + (nd if has_np else 0)
+        nd = row.get("np_done",0);   np_= row.get("np_pend",0);  nt = row.get("np_total",0)
+        has_np = (has_np_fn(row) if has_np_fn else nt>0)
+        np_v   = [str(nd),str(np_),str(nt)] if has_np else ["N/A","N/A","N/A"]
+        vals   = [str(pd),str(pp),str(pt)] + np_v + [str(pt+nt), str(pd+nd)]
 
-        prod_vals  = [str(pd), str(pp), str(pt)]
-        np_vals    = ([str(nd), str(np_), str(nt)] if has_np
-                      else ["N/A", "N/A", "N/A"])
-        grand_vals = [str(gt), str(gd)]
+        def _cell(val, x, is_done=False, is_na=False, is_total=False):
+            fc = (C.gray if is_na else C.green if is_done and val not in ("0","N/A")
+                  else C.txt_muted if val=="0" else C.header if is_total else C.txt_dark)
+            add_text(slide, val, x, RY, SUB_W-0.01, DR, sz=8,
+                     bold=(is_done or is_total) and not is_na, italic=is_na,
+                     color=fc, align=PP_ALIGN.CENTER, va="middle")
 
-        def cell(val, x, is_done=False, is_na=False, is_total=False):
-            col = (C.gray if is_na else
-                   C.green if is_done else
-                   C.txt_muted if val=="0" else
-                   C.header if is_total else C.txt_dark)
-            add_text(slide, val, x, RY, SUB_W-0.01, DR,
-                     sz=8, bold=(is_done or is_total) and not is_na,
-                     italic=is_na, color=col, align=PP_ALIGN.CENTER, va="middle")
-
-        # Prod cells
-        cell(prod_vals[0], TX+LW+0*SUB_W, is_done=True)
-        cell(prod_vals[1], TX+LW+1*SUB_W)
-        cell(prod_vals[2], TX+LW+2*SUB_W, is_total=True)
-        # NP cells
-        np_is_na = not has_np
-        cell(np_vals[0],   TX+LW+3*SUB_W, is_done=(has_np and nd>0), is_na=np_is_na)
-        cell(np_vals[1],   TX+LW+4*SUB_W, is_na=np_is_na)
-        cell(np_vals[2],   TX+LW+5*SUB_W, is_total=has_np, is_na=np_is_na)
-        # Grand total cells
-        cell(str(gt),      TX+LW+6*SUB_W, is_total=True)
-        cell(str(gd),      TX+LW+7*SUB_W, is_done=True)
+        _cell(vals[0], TX+label_w+0*SUB_W, is_done=True)
+        _cell(vals[1], TX+label_w+1*SUB_W)
+        _cell(vals[2], TX+label_w+2*SUB_W, is_total=True)
+        _cell(vals[3], TX+label_w+3*SUB_W, is_done=has_np, is_na=not has_np)
+        _cell(vals[4], TX+label_w+4*SUB_W, is_na=not has_np)
+        _cell(vals[5], TX+label_w+5*SUB_W, is_total=has_np, is_na=not has_np)
+        _cell(vals[6], TX+label_w+6*SUB_W, is_total=True)
+        _cell(vals[7], TX+label_w+7*SUB_W, is_done=True)
 
     # Total row
-    TR_Y = CY + GH + SH2 + len(inst_summary)*DR
-    add_rect(slide, TX, TR_Y, TW, DR, C.header, C.header)
+    TR_Y = CY + GH + SH2 + len(rows)*DR
+    add_rect(slide, TX, TR_Y, TW, DR, C.header)
     add_rect(slide, TX, TR_Y, 0.04, DR, C.accent)
-    add_text(slide, "TOTAL", TX+0.08, TR_Y, LW-0.10, DR,
+    add_text(slide, "TOTAL", TX+0.08, TR_Y, label_w-0.10, DR,
              sz=8.5, bold=True, color=C.accent, va="middle")
-    tot_pd = sum(r.get("prod_done",0)  for r in inst_summary)
-    tot_pp = sum(r.get("prod_pend",0)  for r in inst_summary)
-    tot_pt = sum(r.get("prod_total",0) for r in inst_summary)
-    tot_nd = sum(r.get("np_done",0)    for r in inst_summary if r.get("np_total",0)>0)
-    tot_np2= sum(r.get("np_pend",0)    for r in inst_summary if r.get("np_total",0)>0)
-    tot_nt = sum(r.get("np_total",0)   for r in inst_summary)
-    tot_gt = tot_pt + tot_nt
-    tot_gd = tot_pd + tot_nd
-    tr_vals = [str(tot_pd),str(tot_pp),str(tot_pt),
-               str(tot_nd),str(tot_np2),str(tot_nt),
-               str(tot_gt),str(tot_gd)]
-    tr_colors = [RGBColor(0x34,0xd3,0x99),C.amber,C.white,
-                 RGBColor(0x34,0xd3,0x99),C.amber,C.white,
-                 C.white,RGBColor(0x34,0xd3,0x99)]
-    for ci2, (tv, tfc) in enumerate(zip(tr_vals, tr_colors)):
-        add_text(slide, tv, TX+LW+ci2*SUB_W, TR_Y, SUB_W-0.01, DR,
+    tots = [sum(r.get(k,0) for r in rows)
+            for k in ("prod_done","prod_pend","prod_total","np_done","np_pend","np_total")]
+    tots += [tots[2]+tots[5], tots[0]+tots[3]]
+    tr_clr = [RGBColor(0x34,0xd3,0x99),C.amber,C.white,
+              RGBColor(0x34,0xd3,0x99),C.amber,C.white,
+              C.white,RGBColor(0x34,0xd3,0x99)]
+    for ci,(tv,tfc) in enumerate(zip(tots,tr_clr)):
+        add_text(slide, str(tv), TX+label_w+ci*SUB_W, TR_Y, SUB_W-0.01, DR,
                  sz=8.5, bold=True, color=tfc, align=PP_ALIGN.CENTER, va="middle")
+    return TR_Y + DR
 
-    # ── Notes band ────────────────────────────────────────────────────────────
-    NB_Y = TR_Y + DR + 0.06
-    NB_H = 0.50
-    NB_W = (TW - 0.10) / 2
+
+# =============================================================================
+# SLIDE 1 — Summary Dashboard
+# =============================================================================
+def build_slide1(prs, phase_rows):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
+    header(slide, "SSPM Integration — Summary Dashboard")
+
+    CY = 0.66
+    section_label(slide, "UNIQUE APPLICATIONS — BY PHASE", CY)
+    CY += 0.22
+
+    # ── Phase KPI strip ───────────────────────────────────────────────────────
+    STRIP_H = 1.20      # tall enough to fit 5-status breakdown without overlap
+    TOTAL_W = 1.48
+    GAP     = 0.05
+    n       = len(phase_rows)
+    TIER_W  = (9.64 - TOTAL_W - GAP*(n+1)) / max(n, 1)
+
+    # Grand-total card
+    grand_apps = sum(r["total_apps"]  for r in phase_rows)
+    scope_apps = sum(r["total_apps"]  for r in phase_rows if r.get("in_scope"))
+    grand_inst = sum(r["total_inst"]  for r in phase_rows)
+    add_rect(slide, 0.18, CY, TOTAL_W, STRIP_H, C.header)
+    add_rect(slide, 0.18, CY, 0.05, STRIP_H, C.accent)
+    add_text(slide, "All Phases", 0.30, CY+0.04, TOTAL_W-0.14, 0.16,
+             sz=7, bold=True, color=RGBColor(0x7d,0xd3,0xfc), va="top")
+    add_text(slide, str(grand_apps), 0.30, CY+0.20, TOTAL_W-0.14, 0.32,
+             sz=26, bold=True, color=C.white, va="middle")
+    add_text(slide, "Applications", 0.30, CY+0.54, TOTAL_W-0.14, 0.14,
+             sz=6, color=RGBColor(0x94,0xa3,0xb8), va="top")
+    add_text(slide, f"{scope_apps} in-scope",
+             0.30, CY+0.68, TOTAL_W-0.14, 0.12,
+             sz=5.5, color=RGBColor(0x7d,0xd3,0xfc), va="top")
+    add_text(slide, f"{grand_inst} instances",
+             0.30, CY+0.80, TOTAL_W-0.14, 0.12,
+             sz=5.5, color=RGBColor(0x7d,0xd3,0xfc), va="top")
+
+    # Per-phase cards
+    for ci, row in enumerate(phase_rows):
+        X    = 0.18 + TOTAL_W + GAP + ci*(TIER_W + GAP)
+        tc   = _phase_color(row["phase"])
+        is_s = row.get("in_scope", False)
+        total = row["total_apps"]
+        st   = row["st_counts"]
+        total_inst = row.get("total_inst", total)
+
+        add_rect(slide, X, CY, TIER_W, STRIP_H, C.card, C.border, 0.75)
+        add_rect(slide, X, CY, 0.05, STRIP_H, tc)
+
+        # IN / OUT SCOPE badge
+        bb  = RGBColor(0xdc,0xfc,0xe7) if is_s else RGBColor(0xf1,0xf5,0xf9)
+        bfc = RGBColor(0x16,0x65,0x34) if is_s else RGBColor(0x47,0x55,0x69)
+        add_rect(slide, X+TIER_W-1.04, CY+0.05, 1.00, 0.16, bb)
+        add_text(slide, "IN SCOPE" if is_s else "OUT OF SCOPE",
+                 X+TIER_W-1.04, CY+0.05, 1.00, 0.16,
+                 sz=5.5, bold=True, color=bfc, align=PP_ALIGN.CENTER, va="middle")
+
+        ph_short = row["phase"].replace("Phase ","P")
+        add_text(slide, ph_short, X+0.10, CY+0.05, 0.55, 0.16,
+                 sz=8, bold=True, color=tc, va="top")
+        add_text(slide, str(total), X+0.10, CY+0.22, TIER_W-0.15, 0.30,
+                 sz=24, bold=True, color=tc, va="middle")
+        add_text(slide, "Unique Apps", X+0.10, CY+0.54, TIER_W-0.15, 0.13,
+                 sz=6.5, color=C.txt_muted, va="top")
+
+        # ── 5-status colour bar ───────────────────────────────────────────────
+        BAR_Y = CY + 0.70
+        BAR_H = 0.09
+        bar_w = TIER_W - 0.16
+        _draw_status_bar(slide, X+0.10, BAR_Y, bar_w, BAR_H, st, total_inst)
+
+        # ── Status counts: count number + short label, one cell per status ────
+        # Two rows: top=count (bold, larger), bottom=STATUS_SHORT (small)
+        # wrap=False prevents text spilling outside the cell boundary
+        parts = [(s, st.get(s, 0)) for s in ALL_STATUSES if st.get(s, 0) > 0]
+        if parts:
+            CELL_Y  = BAR_Y + BAR_H + 0.04
+            CELL_H  = STRIP_H - (CELL_Y - CY) - 0.04   # fill remaining card height
+            cell_w  = bar_w / len(parts)
+            lx = X + 0.10
+            for s_key, cnt in parts:
+                short = config.STATUS_SHORT.get(s_key, s_key[:7])
+                # Count number (top half)
+                add_text(slide, str(cnt), lx, CELL_Y,
+                         cell_w - 0.01, CELL_H * 0.55,
+                         sz=9, bold=True, color=_sc(s_key),
+                         align=PP_ALIGN.CENTER, va="middle", wrap=False)
+                # Short label (bottom half)
+                add_text(slide, short, lx, CELL_Y + CELL_H * 0.56,
+                         cell_w - 0.01, CELL_H * 0.40,
+                         sz=5, color=_sc(s_key),
+                         align=PP_ALIGN.CENTER, va="top", wrap=False)
+                lx += cell_w
+
+    # ── Instances table ───────────────────────────────────────────────────────
+    CY += STRIP_H + 0.10
+    section_label(slide, "INSTANCES — PROD & NON-PROD ONBOARDING STATUS", CY)
+    CY += 0.22
+
+    for row in phase_rows:
+        row["phase_lbl"] = row["phase"].replace("Phase ","P")
+
+    def ph_color(row): return _phase_color(row["phase"])
+    def has_np(row):   return row.get("np_total",0) > 0
+
+    bottom = _draw_instances_table(slide, phase_rows, "phase_lbl", 0.60, CY,
+                                   label_color_fn=ph_color, has_np_fn=has_np)
+
+    # ── Notes ─────────────────────────────────────────────────────────────────
+    NB_Y = bottom + 0.06
+    NB_H = 0.48
+    NB_W = (9.64 - 0.10) / 2
     note_defs = [
         ("What is a Unique Application?",
-         "A Unique Application is a distinct SaaS product registered in the SSPM "
-         "programme — e.g. Salesforce, Workday. It is counted once regardless "
-         "of how many environments or regions it operates in.",
-         "Example: Salesforce = 1 unique app, even if it has multiple regional tenants.",
-         C.accent),
+         "A Unique Application is a distinct SaaS product in the SSPM programme "
+         "(e.g. Salesforce, Workday). Counted once regardless of how many environments "
+         "or regions it operates in.",
+         "Example: Salesforce = 1 unique app, even with 8 regional instances.", C.accent),
         ("What is an Instance?",
-         "An Instance is a specific deployment of an app — a particular "
-         "environment (Prod or Non-Prod) or tenant. One app can have "
-         "multiple instances, each onboarded into SSPM separately.",
-         "Example: Salesforce has 3 instances — APAC Prod, EMEA Prod, AMER Non-Prod.",
-         C.teal),
+         "An Instance is one JIRA Story representing a specific deployment — a regional "
+         "environment (Prod or Non-Prod) or tenant. One app can have multiple instances, "
+         "each onboarded into SSPM separately.",
+         "Example: Salesforce has 8 instances — APAC Prod, EMEA Prod, NA Sandbox …", C.teal),
     ]
-    for ni, (title, body, example, nc) in enumerate(note_defs):
-        NX = TX + ni*(NB_W + 0.10)
+    for ni, (title, body, ex, nc) in enumerate(note_defs):
+        NX = 0.18 + ni*(NB_W+0.10)
         add_rect(slide, NX, NB_Y, NB_W, NB_H, C.card, C.border, 0.75)
         add_rect(slide, NX, NB_Y, 0.04, NB_H, nc)
-        add_text(slide, title,   NX+0.10, NB_Y+0.04, NB_W-0.14, 0.16,
+        add_text(slide, title, NX+0.10, NB_Y+0.04, NB_W-0.14, 0.16,
                  sz=7.5, bold=True, color=nc, va="top")
-        add_text(slide, body,    NX+0.10, NB_Y+0.20, NB_W-0.14, 0.18,
+        add_text(slide, body,  NX+0.10, NB_Y+0.20, NB_W-0.14, 0.17,
                  sz=6.5, color=C.txt_mid, va="top")
-        add_text(slide, example, NX+0.10, NB_Y+0.37, NB_W-0.14, 0.12,
+        add_text(slide, ex,    NX+0.10, NB_Y+0.36, NB_W-0.14, 0.11,
                  sz=6, italic=True, color=C.txt_muted, va="top")
 
-    # Legend
+    # Status legend
     LEG_Y = NB_Y + NB_H + 0.04
-    for lx, lbl, lc in [(0.18,"● Completed",C.green),(1.55,"● Pending",C.amber),
-                         (2.85,"● N/A — Non-Prod visibility not available for P3/P4/P5",C.gray)]:
-        add_text(slide, lbl, lx, LEG_Y, 4.5, 0.16, sz=6.5, color=lc)
+    lx = 0.18
+    for st_key in ALL_STATUSES:
+        lbl = "● " + config.STATUS_SHORT.get(st_key, st_key)
+        add_text(slide, lbl, lx, LEG_Y, 1.50, 0.15, sz=6.5, color=_sc(st_key))
+        lx += 1.85
 
-    org_footer_space(slide)
+    org_footer(slide)
 
 
 # =============================================================================
 # SLIDE 2 — Region-wise Summary
 # =============================================================================
-def build_slide_region(prs, region_table):
+def build_slide2_region(prs, region_rows):
+    REG_COLORS = {"APAC":C.accent,"EMEA":C.teal,"Global":C.green,
+                  "Japan":C.purple,"North America":C.amber,"TG":C.gray}
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
     header(slide, "Integration Status — Region-wise Summary")
-
-    REG_COLORS = {
-        "APAC": C.accent, "EMEA": C.teal, "Global": C.green,
-        "Japan": C.purple, "North America": C.amber, "TG": C.gray,
-    }
-
     CY = 0.68
-    add_text(slide, "INSTANCE ONBOARDING STATUS BY REGION — PROD & NON-PROD",
-             0.18, CY, 9.64, 0.18,
-             sz=7.5, bold=True, color=C.txt_muted, va="middle")
-    add_line(slide, 0.18, CY+0.18, 9.82, CY+0.18, C.border, 0.5)
+    section_label(slide, "INSTANCE ONBOARDING STATUS BY REGION — PROD & NON-PROD", CY)
     CY += 0.22
-
-    TX, TW = 0.18, 9.64
-    LW     = 1.20
-    N_SUB  = 8
-    SUB_W  = (TW - LW) / N_SUB
-    GH, SH2, DR = 0.21, 0.165, 0.215
-
-    # Group headers
-    grp_defs2 = [
-        ("Prod Instances",    3, RGBColor(0x06,0x5a,0x8a)),
-        ("Non-Prod Instances",3, RGBColor(0x04,0x60,0x4a)),
-        ("Grand Total",       2, RGBColor(0x2d,0x2d,0x6a)),
-    ]
-    add_rect(slide, TX, CY, LW, GH+SH2, C.header)
-    add_rect(slide, TX, CY, 0.05, GH+SH2, C.teal)
-    add_text(slide, "Region", TX+0.10, CY, LW-0.12, GH+SH2,
-             sz=8, bold=True, color=C.white, va="middle")
-    gx = TX+LW
-    for grp_lbl, n_cols, grp_col in grp_defs2:
-        gw = n_cols*SUB_W
-        add_rect(slide, gx, CY, gw-0.02, GH, grp_col)
-        add_text(slide, grp_lbl, gx, CY, gw-0.02, GH,
-                 sz=7.5, bold=True, color=C.white, align=PP_ALIGN.CENTER, va="middle")
-        sub_lbls = (["Completed","Pending","Total"] if n_cols==3 else ["Instances","Done"])
-        for si,sl in enumerate(sub_lbls):
-            SX=gx+si*SUB_W
-            add_rect(slide, SX, CY+GH, SUB_W-0.01, SH2, C.card_alt, C.border, 0.4)
-            add_text(slide, sl, SX, CY+GH, SUB_W-0.01, SH2,
-                     sz=6, bold=True, color=C.txt_muted, align=PP_ALIGN.CENTER, va="middle")
-        gx += gw
-
-    for ri, row in enumerate(region_table):
-        RY  = CY+GH+SH2+ri*DR
-        bg  = C.card if ri%2==0 else C.card_alt
-        rc  = REG_COLORS.get(row["region"], C.gray)
-        add_rect(slide, TX, RY, TW, DR, bg, C.border, 0.4)
-        add_rect(slide, TX, RY, 0.05, DR, rc)
-        add_text(slide, row["region"], TX+0.10, RY, LW-0.14, DR,
-                 sz=8.5, bold=True, color=rc, va="middle")
-        pd=row.get("prod_done",0); pp=row.get("prod_pend",0); pt=row.get("prod_total",0)
-        nd=row.get("np_done",0);   np2=row.get("np_pend",0); nt=row.get("np_total",0)
-        has_np=(nt>0)
-        np_vals2 = ([str(nd),str(np2),str(nt)] if has_np else ["N/A","N/A","N/A"])
-        all_vals = [str(pd),str(pp),str(pt)] + np_vals2 + [str(pt+nt),str(pd+nd)]
-        is_na_v  = [False]*3 + ([False]*3 if has_np else [True]*3) + [False,False]
-        is_done_v= [True,False,False,has_np,False,False,False,True]
-        is_tot_v = [False,False,True,False,False,has_np,True,False]
-        for ci2,(val,is_na2,is_done2,is_tot2) in enumerate(zip(all_vals,is_na_v,is_done_v,is_tot_v)):
-            col=(C.gray if is_na2 else C.green if is_done2 else
-                 C.header if is_tot2 else C.txt_muted if val=="0" else C.txt_dark)
-            add_text(slide, val, TX+LW+ci2*SUB_W, RY, SUB_W-0.01, DR,
-                     sz=8, bold=(is_done2 or is_tot2) and not is_na2,
-                     italic=is_na2, color=col, align=PP_ALIGN.CENTER, va="middle")
-
-    # Total row
-    TR_Y2=CY+GH+SH2+len(region_table)*DR
-    add_rect(slide, TX, TR_Y2, TW, DR, C.header, C.header)
-    add_rect(slide, TX, TR_Y2, 0.05, DR, C.teal)
-    add_text(slide,"TOTAL",TX+0.10,TR_Y2,LW-0.14,DR,sz=8.5,bold=True,color=C.accent,va="middle")
-    for ci2, (tv, tfc) in enumerate(zip(
-        [str(sum(r.get("prod_done",0) for r in region_table)),
-         str(sum(r.get("prod_pend",0) for r in region_table)),
-         str(sum(r.get("prod_total",0) for r in region_table)),
-         str(sum(r.get("np_done",0)  for r in region_table)),
-         str(sum(r.get("np_pend",0)  for r in region_table)),
-         str(sum(r.get("np_total",0) for r in region_table)),
-         str(sum(r.get("prod_total",0)+r.get("np_total",0) for r in region_table)),
-         str(sum(r.get("prod_done",0)+r.get("np_done",0)   for r in region_table)),
-        ],
-        [RGBColor(0x34,0xd3,0x99),C.amber,C.white,
-         RGBColor(0x34,0xd3,0x99),C.amber,C.white,
-         C.white,RGBColor(0x34,0xd3,0x99)]
-    )):
-        add_text(slide, tv, TX+LW+ci2*SUB_W, TR_Y2, SUB_W-0.01, DR,
-                 sz=8.5, bold=True, color=tfc, align=PP_ALIGN.CENTER, va="middle")
-
-    LEG2_Y = TR_Y2+DR+0.08
-    for lx,lbl,lc in [(0.18,"● Completed",C.green),(1.55,"● Pending",C.amber),
-                       (2.85,"N/A — No Non-Prod environment",C.gray)]:
-        add_text(slide, lbl, lx, LEG2_Y, 3.5, 0.18, sz=6.5, color=lc)
-
-    org_footer_space(slide)
-
-
+    def rc(row): return REG_COLORS.get(row["region_lbl"], C.gray)
+    def has_np(row): return row.get("np_total",0) > 0
+    _draw_instances_table(slide, region_rows, "region_lbl", 1.20, CY,
+                          label_color_fn=rc, has_np_fn=has_np)
+    for lx, lbl, lc in [(0.18,"● Completed",C.green),(1.55,"● Pending",C.amber),
+                         (2.85,"N/A — No Non-Prod environment",C.gray)]:
+        add_text(slide, lbl, lx, 4.90, 3.5, 0.18, sz=6.5, color=lc)
+    org_footer(slide)
 
 
 # =============================================================================
-# SLIDE 2 — P1 Applications (no blockers)
+# SLIDES 3…N — Phase Detail  (DYNAMIC — auto-paginated)
 # =============================================================================
-def build_slide2(prs, p1_apps):
+
+def build_detail_slides(prs, phase, applications):
+    """
+    Creates as many slides as needed for all apps in 'phase'.
+    Automatically paginates at ROWS_PER_DETAIL_SLIDE rows.
+    """
+    # Build per-application rows for this phase
+    app_rows = []
+    for app in applications:
+        ph_insts = [inst for inst in app["instances"] if inst.get("phase") == phase]
+        if not ph_insts:
+            continue
+        disp_st, disp_lbl = _app_display_status(ph_insts)
+        app_rows.append({
+            "name":        app["name"],
+            "disp_status": disp_st,
+            "disp_label":  disp_lbl,
+            "prod_done":   sum(inst.get("prod_done",0)      for inst in ph_insts),
+            "prod_total":  sum(inst.get("prod_total",0)     for inst in ph_insts),
+            "np_done":     sum(inst.get("non_prod_done",0)  for inst in ph_insts),
+            "np_total":    sum(inst.get("non_prod_total",0) for inst in ph_insts),
+            "n_instances": len(ph_insts),
+        })
+
+    if not app_rows:
+        return
+
+    RPP         = config.ROWS_PER_DETAIL_SLIDE
+    total_pages = math.ceil(len(app_rows) / RPP)
+    ph_color    = _phase_color(phase)
+    ph_short    = phase.replace("Phase ","P")
+
+    # Aggregate coverage for all apps in this phase (shown on every page)
+    all_prod_done  = sum(r["prod_done"]  for r in app_rows)
+    all_prod_total = sum(r["prod_total"] for r in app_rows)
+    all_np_done    = sum(r["np_done"]    for r in app_rows)
+    all_np_total   = sum(r["np_total"]   for r in app_rows)
+
+    # 5-status counts at app level (for coverage bar on each page)
+    all_st_counts = {s: sum(1 for r in app_rows
+                            if _display_status(r["disp_status"])[0] == s
+                            or r["disp_status"] == s)
+                     for s in ALL_STATUSES}
+
+    for page_idx in range(total_pages):
+        page_rows = app_rows[page_idx*RPP : (page_idx+1)*RPP]
+        _build_one_detail_slide(
+            prs, phase, ph_short, ph_color,
+            page_rows, page_idx+1, total_pages,
+            len(app_rows),
+            all_prod_done, all_prod_total,
+            all_np_done,   all_np_total,
+            all_st_counts,
+        )
+
+
+def _build_one_detail_slide(prs, phase, ph_short, ph_color,
+                              page_rows, page_num, total_pages, total_apps,
+                              all_prod_done, all_prod_total,
+                              all_np_done, all_np_total, all_st_counts):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
-    header(slide, "P1 Applications — Integration Status", f"P1 · {len(p1_apps)} Apps")
 
-    INST_Y = 0.68
-    all_prod=[x for a in p1_apps for x in a["instances"] if x["env"]=="Prod"]
-    all_np  =[x for a in p1_apps for x in a["instances"] if x["env"]!="Prod"]
-    add_text(slide, "Instance Coverage", 0.3, INST_Y+0.08, 1.65, 0.28, sz=8, bold=True, color=C.txt_muted, va="middle")
-    mini_pill(slide, "PROD",     sum(1 for x in all_prod if x["done"]), len(all_prod), C.green, 2.05, INST_Y)
-    mini_pill(slide, "NON-PROD", sum(1 for x in all_np   if x["done"]), len(all_np),   C.teal,  3.95, INST_Y)
-    for lx,lbl,lc in [(6.2,"● Completed",C.green),(7.3,"● In Progress",C.amber),(8.4,"● Not Started",C.gray)]:
-        add_text(slide, lbl, lx, INST_Y+0.10, 1.1, 0.22, sz=8, color=lc)
-    for cx,lbl in [(3.1,"Status"),(6.3,"PROD"),(8.0,"NON-PROD")]:
-        add_text(slide, lbl, cx, 1.16, 1.6, 0.17, sz=7.5, bold=True, color=C.txt_muted, align=PP_ALIGN.CENTER)
-    add_line(slide, 0.3, 1.35, 9.7, 1.35)
+    badge = (f"{ph_short} · {total_apps} Apps"
+             if total_pages == 1
+             else f"{ph_short} · Pg {page_num}/{total_pages}")
+    header(slide, f"{phase} Applications — Integration Status", badge)
 
-    APP_Y, ROW_H = 1.38, 0.435
-    for idx,app in enumerate(p1_apps):
-        Y   = APP_Y + idx*ROW_H
-        st  = overall_status(app); sc  = STATUS_COLOR.get(st,C.gray)
-        prod=[x for x in app["instances"] if x["env"]=="Prod"]
-        np_i=[x for x in app["instances"] if x["env"]!="Prod"]
-        pd  = sum(1 for x in prod if x["done"]); nd = sum(1 for x in np_i if x["done"])
-        pc  = C.green if pd==len(prod) else (C.amber if pd>0 else C.gray)
-        nc  = C.teal  if (np_i and nd==len(np_i)) else (C.amber if nd>0 else C.gray)
-        add_rect(slide, 0.3, Y, 9.4, ROW_H-0.03, C.card if idx%2==0 else C.card_alt, C.border, 0.5)
-        add_rect(slide, 0.3, Y, 0.06, ROW_H-0.03, sc)
-        add_text(slide, app["name"], 0.45, Y, 2.4, ROW_H-0.03, sz=11, bold=True, color=C.txt_dark, va="middle")
-        pill(slide, 3.1, Y+0.07, 2.3, ROW_H-0.17, st, sc)
-        pill(slide, 6.3, Y+0.07, 1.5, ROW_H-0.17, f"PROD  {pd}/{len(prod)}", pc)
-        if np_i: pill(slide, 8.0, Y+0.07, 1.6, ROW_H-0.17, f"NP  {nd}/{len(np_i)}", nc)
-        else:    add_text(slide, "—", 8.0, Y, 1.6, ROW_H-0.03, sz=9, color=C.txt_muted, align=PP_ALIGN.CENTER)
+    # ── Coverage pills & 5-status bar ────────────────────────────────────────
+    INST_Y = 0.66
+    add_text(slide, "Instance Coverage",
+             0.30, INST_Y+0.06, 1.55, 0.30, sz=8, bold=True, color=C.txt_muted, va="middle")
+    mini_pill(slide, "PROD",     all_prod_done, all_prod_total, C.green, 2.00, INST_Y)
+    if all_np_total > 0:
+        mini_pill(slide, "NON-PROD", all_np_done,  all_np_total,  C.teal,  3.88, INST_Y)
 
-    org_footer_space(slide)
+    # 5-status bar top-right
+    BAR_X, BAR_W = 6.00, 3.70
+    add_text(slide, "App Status Breakdown",
+             BAR_X, INST_Y+0.04, BAR_W, 0.16, sz=6.5, bold=True, color=C.txt_muted, va="top")
+    _draw_status_bar(slide, BAR_X, INST_Y+0.20, BAR_W, 0.10,
+                     all_st_counts, total_apps)
+    # Status legend for the bar
+    lx2 = BAR_X
+    for st_key in ALL_STATUSES:
+        n = all_st_counts.get(st_key, 0)
+        if n > 0:
+            short = config.STATUS_SHORT.get(st_key, st_key[:5])
+            add_text(slide, f"{n} {short}", lx2, INST_Y+0.32, 0.80, 0.12,
+                     sz=5.5, bold=True, color=_sc(st_key), va="top")
+            lx2 += 0.76
 
+    # ── Column layout ─────────────────────────────────────────────────────────
+    # #(0.22) | App+3-boxes(3.30) | Status(2.10) | PROD(1.40) | NP(1.38) = 8.40 + margins
+    C_NUM  = 0.30   # row number column x
+    C_APP  = 0.55   # application name + 3-box area x
+    C_STAT = 3.85   # status pill x
+    C_PROD = 5.98   # prod pill x
+    C_NP   = 7.42   # non-prod pill x
+    W_APP  = 3.22   # app column width
+    W_STAT = 2.05   # status column width
+    W_PROD = 1.36   # prod column width
+    W_NP   = 2.24   # np column width (to edge at 9.66)
 
-# =============================================================================
-# SLIDE 3 — P2 Applications (no blockers)
-# =============================================================================
-def build_slide3(prs, p2_apps):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
-    header(slide, "P2 Applications — Integration Status", f"P2 · {len(p2_apps)} Apps")
+    add_line(slide, 0.30, 1.18, 9.70, 1.18, C.border, 0.75)
+    for cx, lbl, cw in [
+        (C_NUM,  "#",                          0.22),
+        (C_APP,  "Application  ·  Org / Prod / Non-Prod Instances", W_APP),
+        (C_STAT, "Status",                     W_STAT),
+        (C_PROD, "PROD",                       W_PROD),
+        (C_NP,   "NON-PROD",                   W_NP),
+    ]:
+        add_text(slide, lbl, cx, 1.02, cw, 0.17,
+                 sz=7, bold=True, color=C.txt_muted, align=PP_ALIGN.LEFT)
 
-    INST_Y=0.68
-    p2_pd=sum(a["prod_done"] for a in p2_apps); p2_pt=sum(a["prod_total"] for a in p2_apps)
-    p2_nd=sum(a["np_done"]   for a in p2_apps); p2_nt=sum(a["np_total"]   for a in p2_apps)
-    add_text(slide,"Instance Coverage",0.3,INST_Y+0.08,1.65,0.28,sz=8,bold=True,color=C.txt_muted,va="middle")
-    mini_pill(slide,"PROD",    p2_pd,p2_pt,C.green,2.05,INST_Y)
-    mini_pill(slide,"NON-PROD",p2_nd,p2_nt,C.teal, 3.95,INST_Y)
-    for lx,lbl,lc in [(6.2,"● All Done",C.green),(7.25,"● Partial",C.amber),(8.2,"● Not Started",C.gray)]:
-        add_text(slide,lbl,lx,INST_Y+0.10,1.1,0.22,sz=8,color=lc)
-    add_line(slide,0.3,1.15,9.7,1.15)
+    # ── App rows ──────────────────────────────────────────────────────────────
+    APP_Y  = 1.22
+    NOTE_H = 0.32
+    avail  = CONTENT_BOTTOM - NOTE_H - APP_Y
+    ROW_H  = avail / config.ROWS_PER_DETAIL_SLIDE   # ~0.63 for 6 rows
 
-    GCW,GGAP,GY,GRH=2.27,0.07,1.20,0.77
-    for idx,app in enumerate(p2_apps):
-        c,r=idx%4,idx//4; X,Y=0.3+c*(GCW+GGAP),GY+r*GRH
-        pd_ok=app["prod_done"]==app["prod_total"]
-        np_ex=app["np_total"]>0; np_ok=np_ex and app["np_done"]==app["np_total"]
-        cc=C.green if (pd_ok and (not np_ex or np_ok)) else (C.amber if (app["prod_done"]>0 or app["np_done"]>0) else C.gray)
-        pc=C.green if pd_ok else (C.amber if app["prod_done"]>0 else C.gray)
-        add_rect(slide,X,Y,GCW,GRH-0.05,C.card,C.border,0.75)
-        add_rect(slide,X,Y,0.06,GRH-0.05,cc)
-        add_text(slide,app["name"],X+0.12,Y+0.06,GCW-0.18,0.26,sz=10,bold=True,color=C.txt_dark)
-        t1="  ✓" if pd_ok else ("  …" if app["prod_done"]>0 else "  ○")
-        add_text(slide,f"PROD  {app['prod_done']}/{app['prod_total']}{t1}",X+0.12,Y+0.35,GCW-0.18,0.20,sz=8,color=pc)
-        if np_ex:
-            nc=C.teal if np_ok else (C.amber if app["np_done"]>0 else C.gray)
-            t2="  ✓" if np_ok else ("  …" if app["np_done"]>0 else "  ○")
-            add_text(slide,f"NP  {app['np_done']}/{app['np_total']}{t2}",X+0.12,Y+0.53,GCW-0.18,0.20,sz=8,color=nc)
-        else:
-            add_text(slide,"NP  —",X+0.12,Y+0.53,GCW-0.18,0.20,sz=8,color=C.txt_muted)
+    for idx, row in enumerate(page_rows):
+        Y   = APP_Y + idx * ROW_H
+        dst = row["disp_status"]
+        sc  = _sc(dst)
+        sl  = row["disp_label"]
 
-    org_footer_space(slide)
+        pd, pt = row["prod_done"],  row["prod_total"]
+        nd, nt = row["np_done"],    row["np_total"]
+        ni     = row["n_instances"]
+        pc  = C.green if (pt > 0 and pd == pt) else (C.amber if pd > 0 else C.gray)
+        nc  = C.teal  if (nt > 0 and nd == nt) else (C.amber if nd > 0 else C.gray)
 
+        # Row background
+        add_rect(slide, 0.30, Y, 9.40, ROW_H-0.03,
+                 C.card if idx%2==0 else C.card_alt, C.border, 0.5)
+        add_rect(slide, 0.30, Y, 0.05, ROW_H-0.03, sc)
 
-# =============================================================================
-# SLIDE 4 — Milestones & Out-of-Scope (no blockers)
-# =============================================================================
-def build_slide4(prs, tier_summary, milestones):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
-    header(slide, "Milestone Roadmap & Out-of-Scope Overview")
-
-    T_COLS=[{"l":"Tier","x":0.30,"w":0.85},{"l":"Total Apps","x":1.15,"w":1.55},
-            {"l":"Prod Completed","x":2.70,"w":2.00},{"l":"Prod Pending","x":4.70,"w":1.85},
-            {"l":"Non-Prod","x":6.55,"w":3.15}]
-    TY,TH=0.68,0.23
-    add_rect(slide,0.3,TY,9.4,TH,C.header)
-    for col in T_COLS:
-        add_text(slide,col["l"],col["x"]+0.10,TY,col["w"]-0.12,TH,sz=8,bold=True,color=C.white,va="middle")
-    for i_r,row in enumerate(tier_summary):
-        RY=TY+TH+i_r*TH; tc=TIER_COLOR_MAP.get(row["color"],C.gray)
-        add_rect(slide,0.3,RY,9.4,TH,C.card if i_r%2==0 else C.card_alt,C.border,0.5)
-        add_rect(slide,0.3,RY,0.06,TH,tc)
-        vals=[row["tier"],row["total"],row["prod_done"],row["prod_pending"],"N/A — Visibility Pending"]
-        for c_i,col in enumerate(T_COLS):
-            is_na=str(vals[c_i]).startswith("N/A")
-            add_text(slide,vals[c_i],col["x"]+0.12,RY,col["w"]-0.14,TH,
-                     sz=8.5 if c_i==0 else 8,bold=(c_i==0),italic=is_na,
-                     color=tc if c_i==0 else (C.amber if is_na else C.txt_dark),va="middle")
-
-    SEP_Y=TY+TH*4+0.08; add_line(slide,0.3,SEP_Y,9.7,SEP_Y)
-    TX,TW=0.3,9.4; curY=SEP_Y+0.06; THdr,TRH,TGAP=0.27,0.255,0.07
-    for m in milestones:
-        mc=TIER_COLOR_MAP.get(m["color"],C.gray)
-        lbg=RGBColor(min(mc[0]+215,255),min(mc[1]+215,255),min(mc[2]+215,255))
-        sc=STATUS_COLOR.get(m["status"],C.gray)
-        add_rect(slide,TX,curY,TW,THdr,lbg,mc,0.75)
-        add_rect(slide,TX,curY,0.06,THdr,mc)
-        add_text(slide,m["name"],TX+0.14,curY,7.0,THdr,sz=9.5,bold=True,color=mc,va="middle")
-        pill(slide,TX+TW-1.5,curY+0.04,1.45,THdr-0.08,m["status"],sc)
-        for ri,task in enumerate(m["tasks"]):
-            RY=curY+THdr+ri*TRH; ts=STATUS_COLOR.get(task["status"],C.gray)
-            add_rect(slide,TX,RY,TW,TRH-0.03,C.card if ri%2==0 else C.card_alt,C.border,0.5)
-            add_text(slide,str(ri+1),TX+0.10,RY,0.28,TRH-0.03,sz=8,bold=True,color=mc,align=PP_ALIGN.CENTER,va="middle")
-            add_text(slide,task["task"],TX+0.42,RY,7.1,TRH-0.03,sz=9,color=C.txt_dark,va="middle")
-            pill(slide,TX+TW-1.5,RY+0.04,1.45,TRH-0.11,task["status"],ts)
-        curY+=THdr+len(m["tasks"])*TRH+TGAP
-
-    org_footer_space(slide)
-
-
-# =============================================================================
-# SLIDE 5 — Dedicated Blockers Slide
-# =============================================================================
-def build_slide5(prs, p1_blockers, s3_blockers):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
-    header(slide, "Blockers & Impediments")
-
-    PHASE_COL={"Phase 1":C.accent,"Phase 2":C.amber,"Phase 3":C.purple}
-    CY = 0.68
-
-    # ── P1 Integration Blockers ───────────────────────────────────────────────
-    add_rect(slide, 0.18, CY, 9.64, 0.26, RGBColor(0xFF,0xED,0xED), C.red, 0.75)
-    add_rect(slide, 0.18, CY, 0.06, 0.26, C.red)
-    add_text(slide, "🚧  P1 Integration Blockers",
-             0.30, CY, 6, 0.26, sz=9.5, bold=True, color=C.red, va="middle")
-    CY += 0.28
-    BRH = 0.215
-    for b in p1_blockers:
-        ic = C.red if b["impact"]=="High" else C.amber
-        add_rect(slide, 0.18, CY, 9.64, BRH-0.02, C.card, C.border, 0.5)
-        add_rect(slide, 0.18, CY, 0.06, BRH-0.02, ic)
-        add_text(slide, b["id"],   0.30, CY, 0.40, BRH-0.02, sz=8, bold=True, color=ic, va="middle")
-        add_text(slide, b["text"], 0.74, CY, 7.20, BRH-0.02, sz=8.5, color=C.txt_dark, va="middle")
-        add_text(slide, "Owner: "+b["owner"], 8.0, CY, 1.1, BRH-0.02, sz=7.5, color=C.txt_muted, align=PP_ALIGN.RIGHT, va="middle")
-        pill(slide, 9.16, CY+0.03, 0.58, BRH-0.08, b["impact"], ic)
-        CY += BRH
-
-    CY += 0.10
-    add_line(slide, 0.18, CY, 9.82, CY, C.border, 0.75)
-    CY += 0.10
-
-    # ── Cross-phase / Milestone Blockers ──────────────────────────────────────
-    add_rect(slide, 0.18, CY, 9.64, 0.26, RGBColor(0xFF,0xED,0xED), C.red, 0.75)
-    add_rect(slide, 0.18, CY, 0.06, 0.26, C.red)
-    add_text(slide, "🚧  Milestone & Phase Blockers",
-             0.30, CY, 6, 0.26, sz=9.5, bold=True, color=C.red, va="middle")
-    CY += 0.28
-    for b in s3_blockers:
-        ic = C.red if b["impact"]=="High" else C.amber
-        pc = PHASE_COL.get(b.get("phase","Phase 1"), C.gray)
-        add_rect(slide, 0.18, CY, 9.64, BRH-0.02, C.card, C.border, 0.5)
-        add_rect(slide, 0.18, CY, 0.06, BRH-0.02, ic)
-        add_text(slide, b["id"],   0.30, CY, 0.40, BRH-0.02, sz=8, bold=True, color=ic, va="middle")
-        add_text(slide, b["text"], 0.74, CY, 5.70, BRH-0.02, sz=8.5, color=C.txt_dark, va="middle")
-        pill(slide, 6.50, CY+0.03, 1.10, BRH-0.08, b.get("phase",""), pc)
-        add_text(slide, "Owner: "+b["owner"], 7.68, CY, 1.1, BRH-0.02, sz=7.5, color=C.txt_muted, align=PP_ALIGN.RIGHT, va="middle")
-        pill(slide, 9.16, CY+0.03, 0.58, BRH-0.08, b["impact"], ic)
-        CY += BRH
-
-    org_footer_space(slide)
-
-
-# =============================================================================
-# SLIDE 6 — P1 Score Improvement  (8-pane screenshot layout, 3 months)
-# =============================================================================
-def build_slide6(prs, p1_apps):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
-    header(slide, "P1 Apps — Security Score Improvement (Last 3 Months)")
-
-    # Legend row
-    LY = 0.66
-    add_text(slide, "Each pane shows the score trend for one P1 app over Month 1 → Month 2 → Month 3.",
-             0.18, LY, 9.64, 0.22, sz=8, color=C.txt_muted, va="middle")
-
-    # 8 panes: 4 columns × 2 rows
-    COLS, ROWS   = 4, 2
-    PAD_X, PAD_Y = 0.18, 0.90   # left/top padding
-    GAP_X, GAP_Y = 0.10, 0.10   # gap between panes
-    AVAIL_W = SLIDE_W - 2*PAD_X
-    AVAIL_H = 4.34               # leave space for header + legend + org footer
-    PW = (AVAIL_W - (COLS-1)*GAP_X) / COLS
-    PH = (AVAIL_H - (ROWS-1)*GAP_Y) / ROWS
-
-    MONTH_LABELS = ["Month 1", "Month 2", "Month 3"]
-
-    for idx in range(8):
-        col = idx % COLS
-        row = idx // COLS
-        X   = PAD_X + col*(PW+GAP_X)
-        Y   = PAD_Y + row*(PH+GAP_Y)
-        app = p1_apps[idx] if idx < len(p1_apps) else {"name": f"A{idx+1}"}
-
-        # Pane outer card
-        add_rect(slide, X, Y, PW, PH, C.card, C.border, 0.75)
-        # Coloured top bar
-        tc = [C.accent,C.green,C.teal,C.purple,C.amber,C.accent,C.green,C.teal][idx]
-        add_rect(slide, X, Y, PW, 0.22, tc)
-        add_text(slide, app["name"], X+0.08, Y, PW-0.12, 0.22,
-                 sz=9, bold=True, color=C.white, va="middle")
-
-        # Month labels across the pane
-        col_w = (PW - 0.12) / 3
-        for mi, ml in enumerate(MONTH_LABELS):
-            MX = X + 0.06 + mi*col_w
-            add_rect(slide, MX, Y+0.24, col_w-0.04, 0.16,
-                     C.card_alt, C.border, 0.4)
-            add_text(slide, ml, MX, Y+0.24, col_w-0.04, 0.16,
-                     sz=6, bold=True, color=C.txt_muted, align=PP_ALIGN.CENTER, va="middle")
-
-        # Screenshot placeholder area (dashed border + instruction text)
-        SHOT_Y = Y + 0.42
-        SHOT_H = PH - 0.50
-        # Draw a dashed-style placeholder using thin rect + inner text
-        add_rect(slide, X+0.05, SHOT_Y, PW-0.10, SHOT_H,
-                 RGBColor(0xF0,0xF4,0xFA), C.border, 0.5)
-        add_text(slide,
-                 f"📷  Paste screenshot\nof {app['name']} score\ntrend here",
-                 X+0.05, SHOT_Y, PW-0.10, SHOT_H,
+        # Row number
+        global_idx = (page_num-1)*config.ROWS_PER_DETAIL_SLIDE + idx + 1
+        add_text(slide, str(global_idx), C_NUM+0.04, Y, 0.20, ROW_H-0.03,
                  sz=7, color=C.txt_muted, align=PP_ALIGN.CENTER, va="middle")
 
-    org_footer_space(slide)
+        # App name (upper ~48% of row)
+        NAME_H = ROW_H * 0.46
+        add_text(slide, row["name"], C_APP, Y + 0.05, W_APP - 0.06, NAME_H,
+                 sz=9, bold=True, color=C.txt_dark, va="top")
+
+        # ── 3 mini-boxes: ×orgs | ×Prod | ×NP — single line each, no wrap ──
+        BOX_Y  = Y + NAME_H + 0.03
+        BOX_H  = ROW_H - NAME_H - 0.10
+        BOX_W  = (W_APP - 0.08) / 3
+        box_defs = [
+            (f"×{ni} Instance",  C.accent, RGBColor(0xDB, 0xEA, 0xFE)),
+            (f"×{pt} Prod",      C.green,  RGBColor(0xD1, 0xFA, 0xE5)),
+            (f"×{nt} Non-Prod",  C.teal,   RGBColor(0xCC, 0xFB, 0xF1)),
+        ]
+        bx = C_APP
+        for blabel, bcol, blight in box_defs:
+            add_rect(slide, bx, BOX_Y, BOX_W - 0.05, BOX_H, blight, bcol, 0.6)
+            add_text(slide, blabel, bx + 0.02, BOX_Y, BOX_W - 0.09, BOX_H,
+                     sz=7.5, bold=True, color=bcol,
+                     align=PP_ALIGN.CENTER, va="middle", wrap=False)
+            bx += BOX_W
+
+        # Status pill  (binary: Completed/De-Scoped → green, others own colour)
+        pill_h = max(0.22, ROW_H * 0.52)
+        pill_y = Y + (ROW_H - 0.03 - pill_h) / 2
+        pill(slide, C_STAT, pill_y, W_STAT - 0.06, pill_h, sl, sc, sz=7)
+
+        # PROD pill
+        if pt > 0:
+            pill(slide, C_PROD, pill_y, W_PROD - 0.04, pill_h,
+                 f"PROD {pd}/{pt}", pc, sz=7)
+        else:
+            add_text(slide, "—", C_PROD, Y, W_PROD - 0.04, ROW_H-0.03,
+                     sz=9, color=C.txt_muted, align=PP_ALIGN.CENTER)
+
+        # NP pill
+        if nt > 0:
+            pill(slide, C_NP, pill_y, W_NP - 0.04, pill_h,
+                 f"NP {nd}/{nt}", nc, sz=7)
+        else:
+            add_text(slide, "—", C_NP, Y, W_NP - 0.04, ROW_H-0.03,
+                     sz=9, color=C.txt_muted, align=PP_ALIGN.CENTER)
+
+    # ── Note at bottom ────────────────────────────────────────────────────────
+    NOTE_Y = CONTENT_BOTTOM - NOTE_H
+    add_rect(slide, 0.18, NOTE_Y, 9.64, NOTE_H, RGBColor(0xFE,0xF9,0xC3),
+             RGBColor(0xCA,0x8A,0x04), 0.75)
+    add_rect(slide, 0.18, NOTE_Y, 0.05, NOTE_H, RGBColor(0xCA,0x8A,0x04))
+    add_text(slide, "NOTE",
+             0.30, NOTE_Y+0.03, 0.65, 0.14, sz=7, bold=True,
+             color=RGBColor(0x92,0x40,0x0E), va="top")
+    note_body = (
+        "Status Grouping:  "
+        "Completed  =  'Completed' + 'De-Scoped'  (shown in green).   "
+        "Pending  =  'Onboarding In Progress' + 'Not Started' + 'Future Request'  "
+        "(shown with their respective colour).   "
+        "Status is determined by the JIRA dropdown field configured in config.py → STATUS_FIELD."
+    )
+    add_text(slide, note_body,
+             0.30, NOTE_Y+0.05, 9.30, NOTE_H-0.08, sz=6.5,
+             color=RGBColor(0x78,0x35,0x0F), va="middle")
+
+    org_footer(slide)
+
+
+# =============================================================================
+# BLOCKERS SLIDE
+# =============================================================================
+def build_slide_blockers(prs, blockers):
+    PHASE_COL = {ph: _phase_color(ph) for ph in config.PHASE_VALUES}
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.background.fill.solid(); slide.background.fill.fore_color.rgb = C.bg
+    header(slide, "Blockers & Impediments", f"{len(blockers)} Blockers")
+    CY = 0.68
+    add_rect(slide, 0.18, CY, 9.64, 0.26, RGBColor(0xFF,0xED,0xED), C.red, 0.75)
+    add_rect(slide, 0.18, CY, 0.06, 0.26, C.red)
+    add_text(slide, "Active Blockers & Impediments",
+             0.30, CY, 7.0, 0.26, sz=9.5, bold=True, color=C.red, va="middle")
+    CY += 0.28
+    BRH = 0.225
+    for b in blockers:
+        if CY + BRH > CONTENT_BOTTOM: break
+        ic = C.red if b.get("impact","Med")=="High" else C.amber
+        pc = PHASE_COL.get(b.get("phase",""), C.gray)
+        add_rect(slide, 0.18, CY, 9.64, BRH-0.02, C.card, C.border, 0.5)
+        add_rect(slide, 0.18, CY, 0.06, BRH-0.02, ic)
+        add_text(slide, b.get("id",""),   0.30, CY, 0.40, BRH-0.02, sz=8, bold=True, color=ic, va="middle")
+        add_text(slide, b.get("text",""), 0.74, CY, 5.60, BRH-0.02, sz=8.5, color=C.txt_dark, va="middle")
+        ph = b.get("phase","")
+        if ph: pill(slide, 6.40, CY+0.03, 1.10, BRH-0.08, ph, pc)
+        add_text(slide, "Owner: "+b.get("owner","TBD"),
+                 7.60, CY, 1.40, BRH-0.02, sz=7.5, color=C.txt_muted, align=PP_ALIGN.RIGHT, va="middle")
+        pill(slide, 9.16, CY+0.03, 0.58, BRH-0.08, b.get("impact","Med"), ic)
+        CY += BRH
+    org_footer(slide)
+
+
+# =============================================================================
+# MILESTONES SLIDE  (auto-paginated — handles any number of tasks)
+# =============================================================================
+def build_slide_milestones(prs, milestones):
+    TX, TW = 0.18, 9.64
+    THdr, TRH = 0.28, 0.255
+
+    def _new_ms_slide(page_num):
+        sl = prs.slides.add_slide(prs.slide_layouts[6])
+        sl.background.fill.solid(); sl.background.fill.fore_color.rgb = C.bg
+        badge = f"Pg {page_num}" if page_num > 1 else None
+        header(sl, "Milestones & Roadmap", badge)
+        return sl, 0.68
+
+    slide, CY = _new_ms_slide(1)
+    page = 1
+
+    for m in milestones:
+        mc   = _phase_color(m.get("phase", "Phase 1"))
+        sc   = _sc(m.get("status", "not_started"))
+        r, g, b = mc[0], mc[1], mc[2]
+        lbg  = RGBColor(min(r+215,255), min(g+215,255), min(b+215,255))
+        tasks = m.get("tasks", [])
+
+        # Start new slide if milestone header won't fit
+        if CY + THdr > CONTENT_BOTTOM:
+            org_footer(slide)
+            page += 1
+            slide, CY = _new_ms_slide(page)
+
+        # Milestone section header
+        add_rect(slide, TX, CY, TW, THdr, lbg, mc, 0.75)
+        add_rect(slide, TX, CY, 0.06, THdr, mc)
+        add_text(slide, m.get("name",""), TX+0.14, CY, 7.0, THdr,
+                 sz=9.5, bold=True, color=mc, va="middle")
+        pill(slide, TX+TW-1.55, CY+0.04, 1.45, THdr-0.08,
+             _sl(m.get("status","not_started")), sc)
+        CY += THdr
+
+        # Task rows — overflow to new slide when needed
+        for ri, task in enumerate(tasks):
+            if CY + TRH > CONTENT_BOTTOM:
+                org_footer(slide)
+                page += 1
+                slide, CY = _new_ms_slide(page)
+                # Continuation header (compact)
+                add_rect(slide, TX, CY, TW, THdr*0.65, lbg, mc, 0.75)
+                add_text(slide, m.get("name","") + "  (continued)",
+                         TX+0.14, CY, 8.0, THdr*0.65,
+                         sz=8, bold=True, color=mc, va="middle")
+                CY += THdr * 0.65
+
+            ts = _sc(task.get("status", "not_started"))
+            add_rect(slide, TX, CY, TW, TRH-0.03,
+                     C.card if ri%2==0 else C.card_alt, C.border, 0.5)
+            add_text(slide, str(ri+1), TX+0.10, CY, 0.28, TRH-0.03,
+                     sz=8, bold=True, color=mc,
+                     align=PP_ALIGN.CENTER, va="middle")
+            add_text(slide, task.get("task",""), TX+0.42, CY, 7.1, TRH-0.03,
+                     sz=9, color=C.txt_dark, va="middle")
+            pill(slide, TX+TW-1.55, CY+0.04, 1.45, TRH-0.11,
+                 _sl(task.get("status","not_started")), ts)
+            CY += TRH
+
+        CY += 0.08
+
+    org_footer(slide)
 
 
 # =============================================================================
@@ -681,49 +769,71 @@ def main():
     if config.USE_JIRA:
         from jira_loader import load_from_jira
         d            = load_from_jira()
-        app_summary  = d.get("app_summary",  manual_data.APP_SUMMARY)
-        inst_summary = d.get("inst_summary", manual_data.INST_SUMMARY)
-        region_table = d.get("region_table", manual_data.REGION_TABLE)
-        p1_apps      = d["p1_apps"]
-        p1_blockers  = d["p1_blockers"]
-        p2_apps      = d["p2_apps"]
-        s3_blockers  = d["s3_blockers"]
-        tier_summary = manual_data.TIER_SUMMARY
-        milestones   = manual_data.MILESTONES
+        applications = d["applications"]
+        extra        = d["extra_sections"]
+        phase_summary= {}
+        raw_blockers = extra.get("blockers",[])
+        if raw_blockers:
+            bf = config.EXTRA_SECTIONS.get("blockers",{}).get("fields",{})
+            blockers = [{
+                "id"    : f"B{i+1}",
+                "key"   : iss.get("key",""),
+                "text"  : (iss.get("fields") or {}).get("summary",""),
+                "owner" : str(((iss.get("fields") or {}).get("assignee") or {}).get("displayName","TBD")),
+                "impact": str(((iss.get("fields") or {}).get(bf.get("impact_field","")) or {}).get("value","Med")),
+                "phase" : str(((iss.get("fields") or {}).get(bf.get("phase_field",""))  or {}).get("value","")),
+            } for i,iss in enumerate(raw_blockers)]
+        else:
+            blockers = manual_data.BLOCKERS
+        milestones = manual_data.MILESTONES
         print("  Data source: JIRA")
     else:
-        app_summary  = manual_data.APP_SUMMARY
-        inst_summary = manual_data.INST_SUMMARY
-        region_table = manual_data.REGION_TABLE
-        p1_apps      = manual_data.P1_APPS
-        p1_blockers  = manual_data.P1_BLOCKERS
-        p2_apps      = manual_data.P2_APPS
-        tier_summary = manual_data.TIER_SUMMARY
-        milestones   = manual_data.MILESTONES
-        s3_blockers  = manual_data.S3_BLOCKERS
+        applications  = manual_data.APPLICATIONS
+        phase_summary = manual_data.PHASE_SUMMARY
+        blockers      = manual_data.BLOCKERS
+        milestones    = manual_data.MILESTONES
         print("  Data source: data.py (manual)")
+
+    phase_rows  = _build_phase_rows(applications, phase_summary)
+    region_rows = _build_region_rows(applications)
 
     prs = Presentation()
     prs.slide_width  = Inches(SLIDE_W)
     prs.slide_height = Inches(SLIDE_H)
 
-    print("  Slide 1 — Summary Dashboard (Apps + Instances + Notes)...")
-    build_slide1(prs, app_summary, inst_summary)
-    print("  Slide 2 — Region-wise Summary...")
-    build_slide_region(prs, region_table)
-    print("  Slide 3 — P1 Applications...")
-    build_slide2(prs, p1_apps)
-    print("  Slide 4 — P2 Applications...")
-    build_slide3(prs, p2_apps)
-    print("  Slide 5 — Milestones & Out-of-Scope...")
-    build_slide4(prs, tier_summary, milestones)
-    print("  Slide 6 — Blockers...")
-    build_slide5(prs, p1_blockers, s3_blockers)
-    print("  Slide 7 — P1 Score Improvement (8 panes)...")
-    build_slide6(prs, p1_apps)
+    print("  Slide 1 — Summary Dashboard ...")
+    build_slide1(prs, phase_rows)
 
+    print("  Slide 2 — Region Summary ...")
+    build_slide2_region(prs, region_rows)
+
+    slide_num = 3
+    for phase in config.IN_SCOPE_PHASES:
+        ph_apps = [a for a in applications
+                   if any(inst["phase"]==phase for inst in a["instances"])]
+        if not ph_apps: continue
+        n_pages = math.ceil(len(ph_apps) / config.ROWS_PER_DETAIL_SLIDE)
+        print(f"  Slides {slide_num}–{slide_num+n_pages-1} — {phase} Detail "
+              f"({len(ph_apps)} apps → {n_pages} slide{'s' if n_pages>1 else ''}) ...")
+        build_detail_slides(prs, phase, applications)
+        slide_num += n_pages
+
+    print(f"  Slide {slide_num} — Blockers ...")
+    build_slide_blockers(prs, blockers)
+    slide_num += 1
+
+    ms_start = slide_num
+    build_slide_milestones(prs, milestones)
+    ms_pages = len(prs.slides) - (ms_start - 1)
+    if ms_pages > 1:
+        print(f"  Slides {ms_start}–{ms_start+ms_pages-1} — Milestones ({ms_pages} slides, auto-paginated) ...")
+    else:
+        print(f"  Slide {ms_start} — Milestones ...")
+
+    total = len(prs.slides)
     prs.save(config.OUTPUT_FILE)
-    print(f"\n✅  Saved: {config.OUTPUT_FILE}")
+    print(f"\n✅  Saved: {config.OUTPUT_FILE}  ({total} slides total)")
+
 
 if __name__ == "__main__":
     print("\nSSPM PPT Generator")

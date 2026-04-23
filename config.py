@@ -1,36 +1,20 @@
 # =============================================================================
-# config.py  —  SSPM PPT Generator Settings
+# config.py  —  SSPM PPT Generator Settings  (re-wired architecture)
 # =============================================================================
-# This is the ONLY file you need to edit.
+# THE ONLY FILE YOU NEED TO EDIT.
 #
-# IMPORTANT — FIELD NAMES WITH SPACES
-# =====================================
-# JIRA has TWO completely different things that look like field names:
+# FIELD KEYS vs. DISPLAY NAMES — THE GOLDEN RULE
+# ================================================
+# JIRA API uses FIELD KEYS (no spaces):  customfield_10042, status, priority
+# JIRA UI shows DISPLAY NAMES (may have spaces): "Prod Done", "Epic Link"
+# → Always use the FIELD KEY here, never the display name.
+# → Run: python find_jira_fields.py <ISSUE-KEY>  to discover field keys.
 #
-#   1. FIELD KEY  (used in API responses — what you put in config.py)
-#      - Always a single word, no spaces
-#      - Format: customfield_10042  or  status  or  priority  or  assignee
-#      - This is what find_jira_fields.py prints in the LEFT column
-#      - This is what you paste into this config file
-#      - Example:  "prod_done" : "customfield_10042"   ✅ correct
+# FIELD VALUES (dropdown text, label text) CAN have spaces — that's fine.
+# e.g. "In Progress", "North America", "Phase 1" are all valid values.
 #
-#   2. DISPLAY NAME  (shown in the JIRA UI — do NOT use in config.py)
-#      - Can have spaces, e.g. "Prod Instances Done", "Epic Link", "App Tier"
-#      - This appears in the RIGHT column of find_jira_fields.py output
-#      - NEVER use the display name as a field key — it will break
-#      - Example:  "prod_done" : "Prod Instances Done"  ❌ WRONG — will not work
-#
-#   EXCEPTION — field VALUES (dropdown options, label text, priority names):
-#      - These CAN and often DO have spaces
-#      - e.g. "In Progress", "Epic Link", "P1 - Critical Apps"
-#      - Spaces in VALUES are fine — only spaces in KEYS are the problem
-#
-# QUICK REFERENCE:
-#   "Epic Link" as a JQL field name     → put it in quotes in JQL: "Epic Link" = SSPM-10  ✅
-#   "Epic Link" as a Python dict key    → use the field key instead: customfield_10014     ✅
-#   "Prod Instances Done" display name  → use the field key: customfield_10042             ✅
-#   Priority value "Highest"            → use as-is, spaces fine in values                ✅
-#   Label value "Non Prod"              → use as-is, spaces fine in values                ✅
+# JQL FIELD NAMES with spaces must be double-quoted inside the JQL string:
+# e.g.  "Epic Link" = SSPM-10    (quoted inside the JQL)
 # =============================================================================
 
 
@@ -38,256 +22,223 @@
 # 1. OUTPUT
 # -----------------------------------------------------------------------------
 
-OUTPUT_FILE = "SSPM_Status_Light.pptx"
+OUTPUT_FILE = "SSPM_Status.pptx"
 
 
 # -----------------------------------------------------------------------------
 # 2. JIRA CONNECTION
 # -----------------------------------------------------------------------------
-# Set USE_JIRA = False  →  reads data.py (manual, default)
-# Set USE_JIRA = True   →  calls JIRA REST API live
+# USE_JIRA = False  →  use data.py (manual, offline)
+# USE_JIRA = True   →  call JIRA REST API live
 #
-# API token:  https://id.atlassian.com → Security → API tokens → Create
+# API token: https://id.atlassian.com → Security → API tokens → Create
 # -----------------------------------------------------------------------------
 
 USE_JIRA       = False
 JIRA_BASE_URL  = "https://yourcompany.atlassian.net"   # no trailing slash
 JIRA_EMAIL     = "you@yourcompany.com"
 JIRA_API_TOKEN = "YOUR_API_TOKEN_HERE"
-JIRA_PROJECT   = "SSPM"                                # your project key, e.g. "SSPM"
 
 
 # =============================================================================
-# HOW TO FIND FIELD KEYS (run this first before filling anything below)
+# 3. TWO PRIMARY JQL QUERIES
 # =============================================================================
 #
-#   python find_jira_fields.py SSPM-001
+# JQL MAY CONTAIN SPACES — that is intentional.
+# JIRA field names with spaces must be wrapped in double quotes inside the JQL:
+#   "Epic Link" = SSPM-10        → ✅ field name "Epic Link" quoted
+#   project = "MY PROJECT"       → ✅ project name with space quoted
+#   issuetype = "Story"          → ✅ value quotes are optional but safe
 #
-# This prints every field on that issue.  Output looks like:
+# JQL 1 — APPLICATION STORIES
+# ----------------------------
+# One Story = one SaaS instance of an application.
+# All stories for the same application (same Epic / same label / same field)
+# represent that application's full instance footprint.
 #
-#   FIELD KEY                           VALUE / DISPLAY NAME
-#   -----------------------------------------------------------------------
-#   customfield_10042                   3              ◄ CUSTOM
-#   customfield_10043                   Prod Instances Done  ◄ CUSTOM
-#   customfield_10044                   Yes            ◄ CUSTOM
-#   priority                            Highest
-#   status                              In Progress
-#   assignee                            John Smith
+# Example — Salesforce has 8 stories → Salesforce has 8 instances.
 #
-#   LEFT column  = field KEY  → paste this into config.py below
-#   RIGHT column = field VALUE / display name → for reference only, do not paste
+# You can use any valid JQL here. Examples:
+#   'project = "SSPM" AND issuetype = Story ORDER BY created ASC'
+#   '"Epic Link" in (SSPM-10, SSPM-11) ORDER BY key ASC'
+#   'project = SSPM AND labels = "Phase1" ORDER BY priority ASC'
 #
-# =============================================================================
+JQL_STORIES = 'project = "SSPM" AND issuetype = Story ORDER BY created ASC'
 
-
-# =============================================================================
-# 2a. HOW JIRA IDENTIFIES TIERS  (P1 / P2 / P3 / P4 / P5)
-# =============================================================================
+# JQL 2 — SUB-TASKS (PROD vs NON-PROD INSTANCES)
+# -----------------------------------------------
+# Each Sub-task under a Story identifies one Prod or Non-Prod environment.
+# The sub-task's parent field links it back to its Story (= instance).
 #
-# OPTION A — JIRA Priority field  (most common, works out of the box)
-# -------------------------------------------------------------------
-# Set TIER_SOURCE = "priority"
-# The priority field key is simply "priority" — no customfield_ prefix needed.
-# The priority NAMES (Highest, High etc.) are VALUES — spaces in them are fine.
+# Examples:
+#   'project = "SSPM" AND issuetype = Sub-task ORDER BY created ASC'
+#   'project = SSPM AND issuetype in subTaskIssueTypes() ORDER BY key ASC'
 #
-# OPTION B — Custom dropdown field  (e.g. a field called "SSPM Tier")
-# -------------------------------------------------------------------
-# Your display name might be "SSPM Tier" or "App Priority" (spaces in name — fine).
-# But find_jira_fields.py will show its KEY as e.g. customfield_10055.
-# Set TIER_SOURCE = "customfield_10055"   ← the KEY (no spaces), not the display name.
-# Then fill TIER_CUSTOM_VALUES with the exact dropdown option texts (spaces OK there).
+# If your project does NOT use sub-tasks for Prod/Non-Prod, set this to ""
+# and configure INSTANCE_COUNT_FIELDS below instead.
 #
-# OPTION C — Epic  (one Epic per tier)
-# -------------------------------------------------------------------
-# Set TIER_SOURCE = "epic" and fill EPIC_IDS below.
-# The tier is determined by which Epic a Story belongs to.
-#
-# =============================================================================
-
-TIER_SOURCE = "priority"     # "priority"  |  "customfield_XXXXX"  |  "epic"
-
-# Used when TIER_SOURCE = "priority"
-# Left side  = exact Priority VALUE shown in JIRA UI (spaces OK — it's a value, not a key)
-# Right side = tier label used in the PPT
-JIRA_PRIORITY_TO_TIER = {
-    "Highest" : "P1",    # ← if your JIRA shows "Critical" instead, write "Critical": "P1"
-    "High"    : "P2",
-    "Medium"  : "P3",
-    "Low"     : "P4",
-    "Lowest"  : "P5",
-}
-
-# Used when TIER_SOURCE = "customfield_XXXXX"
-# TIER_CUSTOM_FIELD = the field KEY from find_jira_fields.py  (no spaces allowed)
-# TIER_CUSTOM_VALUES maps the dropdown OPTION TEXT → tier label  (spaces in option text OK)
-#
-# Example — your JIRA field is called "App Priority" (display name with space).
-# find_jira_fields.py shows its key is customfield_10055.
-# The dropdown options are "P1 - Critical Apps", "P2 - High" etc.
-# You write:
-#   TIER_CUSTOM_FIELD  = "customfield_10055"          ← KEY, no spaces
-#   TIER_CUSTOM_VALUES = {
-#       "P1 - Critical Apps" : "P1",                  ← VALUE, spaces OK
-#       "P2 - High"          : "P2",
-#   }
-TIER_CUSTOM_FIELD  = "customfield_XXXXX"
-TIER_CUSTOM_VALUES = {
-    "P1 - Critical" : "P1",
-    "P2 - High"     : "P2",
-    "P3 - Medium"   : "P3",
-    "P4 - Low"      : "P4",
-    "P5 - Minimal"  : "P5",
-}
+JQL_SUBTASKS = 'project = "SSPM" AND issuetype = Sub-task ORDER BY created ASC'
 
 
 # =============================================================================
-# 2b. HOW JIRA IDENTIFIES PROD vs NON-PROD INSTANCE COUNTS
+# 4. APPLICATION GROUPING
 # =============================================================================
+# How to determine which "application" a Story belongs to.
+# All stories that resolve to the same application name are grouped together.
 #
-# Your custom fields hold instance counts as numbers on each Story.
-# Their DISPLAY NAMES probably have spaces, e.g.:
-#   "Prod Instances Done"   →  field key: customfield_10042
-#   "Prod Instances Total"  →  field key: customfield_10043
-#   "NP Instances Done"     →  field key: customfield_10044
-#   "NP Instances Total"    →  field key: customfield_10045
+# Options:
+#   "epic_name"      → use the Story's Epic name (recommended for epic-organised boards)
+#   "custom_field"   → use a custom field value on the Story
+#   "label"          → use the first label on the Story that matches an application name
+#   "component"      → use the first JIRA Component on the Story
+#   "summary_prefix" → extract app name from Story summary using a separator
+#                      (e.g. "Salesforce - APAC Prod" → "Salesforce")
 #
-# You use the FIELD KEY (no spaces) in config — not the display name.
-#
-# INSTANCE_SOURCE options:
-#   "custom_fields"  → counts come from number fields on the Story (recommended)
-#   "subtask_label"  → counts derived from sub-tasks labelled Prod / Non-Prod
-#   "component"      → counts derived from JIRA Components on the Story
-#
-# =============================================================================
+APPLICATION_GROUPING = "epic_name"
 
-INSTANCE_SOURCE = "custom_fields"
+# Used only when APPLICATION_GROUPING = "custom_field"
+# Paste the FIELD KEY (no spaces) from find_jira_fields.py
+APPLICATION_FIELD = "customfield_XXXXX"
 
-# Paste the FIELD KEY for each count (left column from find_jira_fields.py output)
-# The display name has spaces — that is fine — but use the KEY here, not the name.
-#
-# HOW TO FIND EACH KEY:
-#   1. Run: python find_jira_fields.py SSPM-001
-#   2. Find the row whose right column says something like "Prod Instances Done"
-#   3. Copy the LEFT column value (e.g. customfield_10042)
-#   4. Paste it as the value below
-#
-INSTANCE_FIELDS = {
-    # PPT concept       Field KEY (from find_jira_fields.py)   Display name (for your reference)
-    "prod_done"  : "customfield_XXXXX",   # e.g. "Prod Instances Done"    — number field
-    "prod_total" : "customfield_XXXXX",   # e.g. "Prod Instances Total"   — number field
-    "np_done"    : "customfield_XXXXX",   # e.g. "NP Instances Done"      — number field
-    "np_total"   : "customfield_XXXXX",   # e.g. "NP Instances Total"     — number field (0 = no NP)
-}
-
-# Used only when INSTANCE_SOURCE = "subtask_label"
-# These are label VALUES in JIRA — spaces in the label text are fine here
-PROD_LABEL    = "Prod"       # exact label text on Prod sub-tasks     (spaces OK in value)
-NONPROD_LABEL = "Non-Prod"   # exact label text on Non-Prod sub-tasks (spaces OK in value)
+# Used only when APPLICATION_GROUPING = "summary_prefix"
+# The separator that splits app name from instance detail in the summary
+# e.g. "Salesforce - APAC Prod" uses separator " - "
+APPLICATION_SUMMARY_SEPARATOR = " - "
 
 
 # =============================================================================
-# 2c. HOW JIRA IDENTIFIES WHICH STORIES BELONG TO EACH SLIDE SECTION
+# 5. PHASE IDENTIFICATION  (5 phases)
 # =============================================================================
+# A JIRA field on each Story identifies which of the 5 phases it belongs to.
+# Use find_jira_fields.py to locate the field key.
 #
-# The generator fetches Stories under each Epic using JQL.
-# "Epic Link" is the JQL field name — it has a space.
-# In JQL queries, field names with spaces are wrapped in double quotes:
-#   "Epic Link" = SSPM-10
-#
-# This is handled automatically inside jira_loader.py — you just paste
-# the Epic issue key below (e.g. "SSPM-10"). No spaces issue for you here.
-#
-# EPIC_LINK_STYLE:
-#   "classic"  → JQL uses  "Epic Link" = KEY   (older JIRA Software projects)
-#   "nextgen"  → JQL uses  parent = KEY        (team-managed / next-gen projects)
-#
-# How to tell which one:
-#   Run find_jira_fields.py on a Story.
-#   If you see a field called "Epic Link" in the output → use "classic"
-#   If you see "parent" pointing to an Epic key        → use "nextgen"
-#
+PHASE_FIELD = "customfield_XXXXX"   # field KEY, no spaces
+
+# Exact dropdown values in JIRA for each phase (spaces in values are fine)
+PHASE_VALUES = ["Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5"]
+
+
 # =============================================================================
+# 6. PROJECT STATUS  (completed / in-progress / backlog / de-scoped)
+# =============================================================================
+# The JIRA field that holds the integration project status for each Story.
+# Use "status" for the built-in JIRA status field, or a custom field key.
+#
+STATUS_FIELD = "status"    # "status"  OR  "customfield_XXXXX"
 
-EPIC_LINK_STYLE = "classic"    # "classic"  |  "nextgen"
-
-EPIC_IDS = {
-    # Section in PPT       Epic issue key    Stories it contains
-    "p1_apps"    : "SSPM-10",   # one Story per P1 app being onboarded
-    "p2_apps"    : "SSPM-11",   # one Story per P2 app being onboarded
-    "p1_blockers": "SSPM-12",   # blocker / impediment tickets for P1
-    "s3_blockers": "SSPM-13",   # cross-phase blockers (Phase 2 / Phase 3)
-    "milestones" : "SSPM-14",   # Phase 2 and Phase 3 task stories
+# Map JIRA field values → one of the 4 standard statuses used in the PPT.
+# Add or edit the JIRA values to match your project's exact status names.
+# The mapping is case-insensitive.
+STATUS_MAPPING = {
+    "completed":  ["Done", "Completed", "Complete", "Closed", "Resolved"],
+    "in_progress": ["In Progress", "In Development", "In Review", "Active", "In-Progress"],
+    "backlog":    ["To Do", "Backlog", "Not Started", "Open", "New", "Pending"],
+    "de_scoped":  ["De-scoped", "De-Scoped", "Won't Do", "Cancelled", "Rejected", "Invalid", "Withdrawn"],
 }
 
 
 # =============================================================================
-# 2d. HOW JIRA IDENTIFIES THE REGION OF EACH APP
+# 7. REGION IDENTIFICATION
 # =============================================================================
+# The JIRA field that holds the region for each Story.
+# Paste the FIELD KEY (no spaces) from find_jira_fields.py.
 #
-# REGION_SOURCE options:
-#   "custom_field"  →  a dropdown or text field on each Story holds the region name
-#   "label"         →  Stories are tagged with labels like "APAC", "EMEA"
-#   "component"     →  JIRA Components are named after regions
-#
-# For "custom_field":
-#   The display name might be "App Region" or "Region" (spaces OK in display name).
-#   Use the field KEY from find_jira_fields.py (no spaces).
-#
-# For "label":
-#   The label VALUES can have spaces if yours do — e.g. "North America" is fine.
-#   List every region label exactly as it appears in JIRA.
-#
-# =============================================================================
+REGION_FIELD = "customfield_XXXXX"  # field KEY
 
-REGION_SOURCE = "custom_field"    # "custom_field"  |  "label"  |  "component"
-
-# Used when REGION_SOURCE = "custom_field"
-# Paste the field KEY (no spaces) — the display name "App Region" is irrelevant here
-REGION_FIELD  = "customfield_XXXXX"
-
-# Used when REGION_SOURCE = "label"
-# List exact label VALUES from JIRA — spaces in label values are fine
-REGION_LABELS = ["APAC", "EMEA", "Global", "Japan", "North America", "TG"]
-
-# Regions shown as rows in Slide 2 (order controls row order top to bottom)
+# Canonical region names shown as rows in the Region slide (order = row order)
 REGIONS = ["APAC", "EMEA", "Global", "Japan", "North America", "TG"]
 
 
 # =============================================================================
-# 2e. OTHER FIELD MAPPINGS  (blockers and phase tags)
+# 8. INSTANCE TYPE — PROD vs NON-PROD  (identified from Sub-tasks)
 # =============================================================================
+# Each Sub-task has a field that says whether it is a Prod or Non-Prod instance.
+# Paste the FIELD KEY for that field.
 #
-# "status" and "assignee" are built-in JIRA fields — their keys have no spaces.
-# Custom fields below: use the field KEY (no spaces), not the display name.
-#
-# Example — your field is displayed as "Is Blocker?" in JIRA UI.
-# find_jira_fields.py shows its key is customfield_10060.
-# You write:  "customfield_10060" : "is_blocker"   ← KEY on left, no spaces
-#
-# =============================================================================
+INSTANCE_TYPE_FIELD = "customfield_XXXXX"   # field KEY on the Sub-task
 
-OTHER_FIELDS = {
-    # Field KEY (no spaces)    →  PPT concept      Notes
-    "status"            : "onboard_status",   # built-in — do not change
-    "assignee"          : "owner",            # built-in — do not change
-    "customfield_XXXXX" : "is_blocker",       # custom — value: "Yes" / "No"
-    "customfield_XXXXX" : "impact",           # custom — value: "High" / "Med" / "Low"
-    "customfield_XXXXX" : "phase",            # custom — value: "Phase 1" / "Phase 2" / "Phase 3"
+# Map JIRA field values on Sub-tasks → "prod" or "non_prod"
+INSTANCE_TYPE_MAPPING = {
+    "prod":     ["Production", "Prod", "PRD", "prod"],
+    "non_prod": ["Non-Production", "Non-Prod", "NP", "UAT", "Staging", "Dev", "Test", "non-prod"],
 }
 
-# How JIRA status VALUES map to PPT status labels
-# Status values can have spaces — that is fine here (they are values, not keys)
-JIRA_STATUS_MAP = {
-    "Done"        : "Completed",
-    "In Progress" : "In Progress",   # ← "In Progress" has a space — fine, it's a value
-    "To Do"       : "Not Started",   # ← "To Do" has a space — fine
-    "Blocked"     : "Not Started",
-    "Open"        : "Not Started",
+# Set True if INSTANCE_TYPE_FIELD is not available and type should be inferred
+# from keywords in the Sub-task summary line instead.
+INSTANCE_TYPE_FROM_SUMMARY = False
+
+# Sub-task statuses that count as "done / complete"
+SUBTASK_DONE_STATUSES = ["Done", "Completed", "Closed", "Resolved"]
+
+# ── Alternative: instance counts as custom fields on the Story ───────────────
+# If JQL_SUBTASKS = "" (no sub-tasks), the loader reads these number fields
+# directly from each Story to get Prod/Non-Prod counts.
+# Leave as "customfield_XXXXX" (placeholder) when using sub-tasks.
+INSTANCE_COUNT_FIELDS = {
+    "prod_done"      : "customfield_XXXXX",  # display name e.g. "Prod Instances Done"
+    "prod_total"     : "customfield_XXXXX",  # display name e.g. "Prod Instances Total"
+    "non_prod_done"  : "customfield_XXXXX",  # display name e.g. "NP Instances Done"
+    "non_prod_total" : "customfield_XXXXX",  # display name e.g. "NP Instances Total"
 }
 
 
 # =============================================================================
-# 3. VISUAL THEME
+# 9. EXTRA SLIDE SECTIONS  (Blockers slide + Milestones slide)
+# =============================================================================
+#
+# BLOCKERS SLIDE
+# ──────────────
+# Provide a JQL that returns all blocker/impediment issues.
+# Common approaches:
+#   - Issues with a specific label:   'project = SSPM AND labels = "blocker"'
+#   - Issues in a specific Epic:      '"Epic Link" = SSPM-99 ORDER BY priority DESC'
+#   - Issues with a custom flag:      'project = SSPM AND "Blocker Flag" = Yes'
+#   - Issues of a specific type:      'project = SSPM AND issuetype = "Impediment"'
+# Set jql = "" to skip this slide entirely.
+#
+# MILESTONES SLIDE
+# ────────────────
+# Provide a JQL that returns milestone/roadmap issues.
+# Each issue becomes one milestone section; its sub-tasks become the task rows.
+# Common approaches:
+#   - Epic query:     '"Epic Link" = SSPM-20 ORDER BY key ASC'
+#   - Label query:    'project = SSPM AND labels = "milestone" ORDER BY duedate ASC'
+#   - Issuetype:      'project = SSPM AND issuetype = Epic ORDER BY created ASC'
+# Task count is DYNAMIC — any number of sub-tasks per milestone auto-paginate.
+# Set jql = "" to skip this slide entirely.
+#
+# FIELD KEY REMINDER: use find_jira_fields.py to get the correct key for each field.
+#
+EXTRA_SECTIONS = {
+    "blockers": {
+        # ← EDIT THIS: JQL that returns your blocker issues
+        "jql":         "",
+        # e.g.  'project = SSPM AND labels = "blocker" ORDER BY priority DESC'
+        # e.g.  '"Epic Link" = SSPM-99 ORDER BY created ASC'
+        "slide_title": "Blockers & Impediments",
+        "fields": {
+            "owner_field":  "assignee",           # built-in JIRA field — keep as-is
+            "impact_field": "customfield_XXXXX",  # field KEY for High/Med/Low impact
+            "phase_field":  "customfield_XXXXX",  # same field KEY as PHASE_FIELD
+        },
+    },
+    "milestones": {
+        # ← EDIT THIS: JQL that returns your milestone/roadmap issues
+        "jql":         "",
+        # e.g.  '"Epic Link" = SSPM-20 ORDER BY key ASC'
+        # e.g.  'project = SSPM AND issuetype = Epic ORDER BY created ASC'
+        "slide_title": "Milestones & Roadmap",
+        "fields": {
+            "phase_field":  "customfield_XXXXX",  # field KEY for phase
+            "target_field": "customfield_XXXXX",  # field KEY for target date/sprint
+            "status_field": "status",             # "status" or a custom field KEY
+        },
+    },
+}
+
+
+# =============================================================================
+# 10. VISUAL THEME
 # =============================================================================
 
 THEME = {
@@ -308,3 +259,88 @@ THEME = {
     "txt_mid"   : (0x33, 0x41, 0x55),
     "txt_muted" : (0x64, 0x74, 0x8B),
 }
+
+# =============================================================================
+# 10b. STATUS SYSTEM — 5 canonical statuses
+# =============================================================================
+#
+# HOW THE STATUS PIPELINE WORKS
+# ──────────────────────────────
+# Step 1 — JIRA RAW VALUE  (what the JIRA dropdown field actually contains)
+#           e.g. "Onboarding In Progress", "Future Request - Integration Not
+#                currently Supported", "De-Scoped", etc.
+#
+# Step 2 — STATUS_MAPPING  (map raw JIRA value → one of 5 internal keys)
+#           Add every synonym/variant your JIRA instance uses.
+#           Matching is case-insensitive. The 5 internal keys are fixed:
+#             completed | de_scoped | future_request | not_started | in_progress
+#
+# Step 3 — STATUS_LABELS  (what appears in PPT pills and slide cells)
+#           Edit these to control the exact wording shown in the deck.
+#           Keep them SHORT — pills are narrow.
+#
+# Step 4 — STATUS_SHORT  (tiny label for the KPI colour bar below phase cards)
+#           Must be ≤ 8 characters to avoid overlap in the compact chip row.
+#
+# =============================================================================
+
+# ── Step 2: Map raw JIRA dropdown text → internal key ────────────────────────
+# Add every variant your JIRA project uses as extra list entries.
+STATUS_MAPPING = {
+    "completed":      ["Completed", "Done", "Complete", "Closed"],
+    "de_scoped":      ["De-Scoped", "De-scoped", "Descoped", "Won't Do", "Cancelled"],
+    "future_request": [
+        "Future Request",
+        "Future Request - Integration Not currently Supported",
+        "Future-Request", "Future", "Planned",
+    ],
+    "not_started":    ["Not Started", "To Do", "Open", "Backlog", "New", "Pending"],
+    "in_progress":    [
+        "Onboarding In Progress",
+        "In Progress", "In Development", "In Review", "Active", "In-Progress",
+    ],
+}
+
+# ── Step 3: PPT display labels (shown in pills on slides 3+) ─────────────────
+# Edit the RIGHT-hand values only. Keep them concise (≤ 20 chars recommended).
+STATUS_LABELS = {
+    "completed":      "Completed",
+    "de_scoped":      "De-Scoped",
+    "future_request": "Future Request",
+    "not_started":    "Not Started",
+    "in_progress":    "In Progress",
+}
+
+# ── Step 4: Compact chip labels for KPI colour bar (≤ 8 chars) ───────────────
+STATUS_SHORT = {
+    "completed":      "Done",
+    "de_scoped":      "D-Scoped",
+    "future_request": "Future",
+    "not_started":    "Not Strt",
+    "in_progress":    "In Prog",
+}
+
+# Status → theme colour key (defined in THEME section above)
+STATUS_COLORS = {
+    "completed":      "green",
+    "de_scoped":      "purple",
+    "future_request": "teal",
+    "not_started":    "gray",
+    "in_progress":    "amber",
+}
+
+# For detail slides (slide 3/4): statuses that roll up to "Completed" (green)
+# Everything else is shown as its own status pill.
+COMPLETED_STATUSES = ["completed", "de_scoped"]
+
+# =============================================================================
+# 11. DETAIL SLIDES — PHASE SCOPE
+# =============================================================================
+# Phases listed here get full per-application detail slides (dynamic, multi-page).
+# All other phases appear only in the summary table row (aggregated counts).
+# Typically Phase 1 + Phase 2 = the active in-scope phases.
+#
+IN_SCOPE_PHASES = ["Phase 1", "Phase 2"]
+
+# Max application rows per detail slide (increase to pack more rows in)
+ROWS_PER_DETAIL_SLIDE = 6
