@@ -41,6 +41,12 @@ def _get(url, params=None):
     resp.raise_for_status()
     return resp.json()
 
+def _post(url, body):
+    headers = {**_headers(), "Content-Type": "application/json"}
+    resp = requests.post(url, headers=headers, auth=_auth(), json=body)
+    resp.raise_for_status()
+    return resp.json()
+
 def _field(issue, key):
     """Safely read a field from a JIRA issue dict."""
     return (issue.get("fields") or {}).get(key)
@@ -61,22 +67,24 @@ def _field_value(raw):
 def _fetch_all(jql, extra_fields=""):
     """
     Execute a JQL query and return ALL matching issues (auto-paginated).
+    Uses POST /rest/api/3/search/jql (replaces the deprecated GET /rest/api/3/search).
     jql may contain spaces and quoted field names — passed as-is to the API.
     """
     if not jql:
         return []
 
-    url = f"{JIRA_BASE_URL}/rest/api/3/search"
-    base = "summary,status,assignee,parent,subtasks"
-    fields = f"{base},{extra_fields}" if extra_fields else base
+    url = f"{JIRA_BASE_URL}/rest/api/3/search/jql"
+    base = ["summary", "status", "assignee", "parent", "subtasks"]
+    if extra_fields:
+        base += [f.strip() for f in extra_fields.split(",") if f.strip()]
 
     issues, start = [], 0
     while True:
-        data = _get(url, params={
+        data = _post(url, {
             "jql"       : jql,
             "startAt"   : start,
             "maxResults": 100,
-            "fields"    : fields,
+            "fields"    : base,
         })
         batch = data.get("issues", [])
         issues.extend(batch)
