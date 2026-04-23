@@ -48,22 +48,22 @@ except requests.exceptions.ConnectionError as e:
     err(f"Check JIRA_BASE_URL in config.py ({e})")
     raise SystemExit(1)
 
-# ── Step 2: POST search/jql with minimal body ────────────────────────────────
-print("\nStep 2 — POST /rest/api/3/search/jql (minimal body)")
+# ── Step 2: POST search/jql — endpoint reachable ────────────────────────────
+print("\nStep 2 — POST /rest/api/3/search/jql (endpoint reachable)")
 url  = f"{JIRA_BASE_URL}/rest/api/3/search/jql"
-body = {"jql": "ORDER BY created DESC", "maxResults": 1}
+body = {"jql": JQL_STORIES, "maxResults": 1}
 r = requests.post(url, headers=headers_post, auth=auth, json=body)
 print(f"  Status : {r.status_code}")
 if r.ok:
     ok(f"Search endpoint works — total issues: {r.json().get('total','?')}")
 else:
-    err(f"Failed — raw response:")
+    err("Failed — raw response:")
     print(f"  {r.text[:600]}")
 
 # ── Step 3: POST search/jql with fields array ────────────────────────────────
 print("\nStep 3 — POST /rest/api/3/search/jql (with fields array)")
 body = {
-    "jql"       : "ORDER BY created DESC",
+    "jql"       : JQL_STORIES,
     "maxResults": 1,
     "fields"    : ["summary", "status", "assignee"],
 }
@@ -79,14 +79,21 @@ else:
     print(f"  {r.text[:600]}")
 
 # ── Step 4: JQL_STORIES from config ─────────────────────────────────────────
-print(f"\nStep 4 — Your JQL_STORIES query")
+print(f"\nStep 4 — Your JQL_STORIES query (full field set)")
 info(f"JQL: {JQL_STORIES[:80]}")
-body = {"jql": JQL_STORIES, "maxResults": 1, "fields": ["summary", "status"]}
+body = {
+    "jql"       : JQL_STORIES,
+    "maxResults": 1,
+    "fields"    : ["summary", "status", "assignee", "parent", "subtasks"],
+}
 r = requests.post(url, headers=headers_post, auth=auth, json=body)
 print(f"  Status : {r.status_code}")
 if r.ok:
     total = r.json().get("total", 0)
     ok(f"Query valid — {total} issues match")
+    issues = r.json().get("issues", [])
+    if issues:
+        ok(f"Sample: {issues[0].get('key')} — {(issues[0].get('fields') or {}).get('summary','')[:60]}")
 else:
     err("JQL query rejected")
     print(f"  {r.text[:600]}")

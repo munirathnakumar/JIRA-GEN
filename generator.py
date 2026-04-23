@@ -98,6 +98,10 @@ def _phase_color(phase_label):
     try:   return PHASE_PALETTE[config.PHASE_VALUES.index(phase_label) % len(PHASE_PALETTE)]
     except ValueError: return C.gray
 
+def _phase_label(raw_phase):
+    """Apply PHASE_DISPLAY_NAMES mapping; fall back to raw value."""
+    return config.PHASE_DISPLAY_NAMES.get(raw_phase, raw_phase)
+
 def _sc(status): return _rgb(config.STATUS_COLORS.get(status, "gray"))
 def _sl(status): return config.STATUS_LABELS.get(status, status.replace("_"," ").title())
 
@@ -331,15 +335,18 @@ def build_slide1(prs, phase_rows):
         add_rect(slide, X, CY, TIER_W, STRIP_H, C.card, C.border, 0.75)
         add_rect(slide, X, CY, 0.05, STRIP_H, tc)
 
-        # IN / OUT SCOPE badge
+        # Phase badge — label from PHASE_BADGE_LABELS, fallback to IN/OUT SCOPE
+        badge_lbl = config.PHASE_BADGE_LABELS.get(
+            row["phase"], "IN SCOPE" if is_s else "OUT OF SCOPE"
+        )
         bb  = RGBColor(0xdc,0xfc,0xe7) if is_s else RGBColor(0xf1,0xf5,0xf9)
         bfc = RGBColor(0x16,0x65,0x34) if is_s else RGBColor(0x47,0x55,0x69)
         add_rect(slide, X+TIER_W-1.04, CY+0.05, 1.00, 0.16, bb)
-        add_text(slide, "IN SCOPE" if is_s else "OUT OF SCOPE",
+        add_text(slide, badge_lbl,
                  X+TIER_W-1.04, CY+0.05, 1.00, 0.16,
-                 sz=5.5, bold=True, color=bfc, align=PP_ALIGN.CENTER, va="middle")
+                 sz=5.5, bold=True, color=bfc, align=PP_ALIGN.CENTER, va="middle", wrap=False)
 
-        ph_short = row["phase"].replace("Phase ","P")
+        ph_short = _phase_label(row["phase"]).replace("Phase ","P")
         add_text(slide, ph_short, X+0.10, CY+0.05, 0.55, 0.16,
                  sz=8, bold=True, color=tc, va="top")
         add_text(slide, str(total), X+0.10, CY+0.22, TIER_W-0.15, 0.30,
@@ -382,7 +389,7 @@ def build_slide1(prs, phase_rows):
     CY += 0.22
 
     for row in phase_rows:
-        row["phase_lbl"] = row["phase"].replace("Phase ","P")
+        row["phase_lbl"] = _phase_label(row["phase"]).replace("Phase ","P")
 
     def ph_color(row): return _phase_color(row["phase"])
     def has_np(row):   return row.get("np_total",0) > 0
@@ -483,7 +490,7 @@ def build_detail_slides(prs, phase, applications):
     RPP         = config.ROWS_PER_DETAIL_SLIDE
     total_pages = math.ceil(len(app_rows) / RPP)
     ph_color    = _phase_color(phase)
-    ph_short    = phase.replace("Phase ","P")
+    ph_short    = _phase_label(phase).replace("Phase ","P")
 
     # Aggregate coverage for all apps in this phase (shown on every page)
     all_prod_done  = sum(r["prod_done"]  for r in app_rows)
@@ -763,16 +770,151 @@ def build_slide_milestones(prs, milestones):
 
 
 # =============================================================================
+# APPENDIX — Detailed instance / sub-task table  (auto-paginated)
+# =============================================================================
+
+def _get_appendix_rows(applications):
+    """Flatten all instances + their sub-task rows into one list for the appendix."""
+    rows = []
+    for app in applications:
+        for inst in app["instances"]:
+            base = {
+                "app_name"  : app["name"],
+                "inst_name" : inst.get("instance_name") or inst.get("summary", ""),
+                "app_id"    : inst.get("app_id", "—"),
+                "phase"     : _phase_label(inst.get("phase", "")),
+            }
+            subtasks = inst.get("subtasks", [])
+            if subtasks:
+                for st in subtasks:
+                    raw_st = st.get("status", "")
+                    # Map raw sub-task status string → canonical key
+                    raw_lower = raw_st.lower().strip()
+                    canonical = "not_started"
+                    for key, synonyms in config.STATUS_MAPPING.items():
+                        if any(s.lower() == raw_lower for s in synonyms):
+                            canonical = key
+                            break
+                    if st.get("done"):
+                        canonical = "completed"
+                    rows.append({**base,
+                        "sub_key": st.get("key", ""),
+                        "sub_name": st.get("name", ""),
+                        "env"    : st.get("env", "—"),
+                        "status" : canonical,
+                    })
+            else:
+                # No sub-task detail — show one summary row per instance
+                rows.append({**base,
+                    "sub_key" : inst.get("key", ""),
+                    "sub_name": inst.get("instance_name") or inst.get("summary", ""),
+                    "env"     : "Prod + Non-Prod",
+                    "status"  : inst.get("status", "not_started"),
+                })
+    return rows
+
+
+def build_appendix_slides(prs, appendix_rows):
+    rows = appendix_rows
+    if not rows:
+        return
+
+    # Column definitions: (header, width_inches)
+    COLS = [
+        ("#",            0.30),
+        ("Application",  1.76),
+        ("Instance",     2.10),
+        ("App ID",       0.90),
+        ("Phase",        0.82),
+        ("Env",          0.82),
+        ("Sub-task Key", 0.94),
+        ("Status",       1.64),
+    ]
+    TX     = 0.18
+    HDR_H  = 0.26
+    ROW_H  = 0.21
+    START_Y = 0.68 + HDR_H
+    RPP    = int((CONTENT_BOTTOM - START_Y) / ROW_H)   # rows per page
+    total_pages = math.ceil(len(rows) / RPP)
+
+    for page in range(total_pages):
+        page_rows = rows[page * RPP : (page + 1) * RPP]
+
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = C.bg
+
+        badge = f"Pg {page+1}/{total_pages}"
+        header(slide, "Appendix — Application Instance Detail", badge)
+
+        # ── Column headers ────────────────────────────────────────────────────
+        CX = TX
+        for lbl, cw in COLS:
+            add_rect(slide, CX, 0.68, cw - 0.02, HDR_H, C.header)
+            add_rect(slide, CX, 0.68, 0.03, HDR_H, C.accent)
+            add_text(slide, lbl, CX + 0.06, 0.68, cw - 0.08, HDR_H,
+                     sz=7, bold=True, color=C.white, va="middle", wrap=False)
+            CX += cw
+
+        # ── Data rows ─────────────────────────────────────────────────────────
+        prev_app = None
+        for ri, row in enumerate(page_rows):
+            RY = START_Y + ri * ROW_H
+            # Alternate background; shade differently when app group changes
+            same_app = row["app_name"] == prev_app
+            bg = C.card if same_app else RGBColor(0xF0, 0xF4, 0xFF) if ri % 2 == 0 else C.card_alt
+            prev_app = row["app_name"]
+
+            st_key = row["status"]
+            sc     = _sc(st_key)
+            sl     = config.STATUS_LABELS.get(st_key, st_key)
+
+            add_rect(slide, TX, RY,
+                     sum(cw for _, cw in COLS) - 0.02, ROW_H - 0.02,
+                     bg, C.border, 0.3)
+
+            global_row = page * RPP + ri + 1
+            CX = TX
+            for ci, (lbl, cw) in enumerate(COLS):
+                val = [
+                    str(global_row),
+                    row["app_name"],
+                    row["inst_name"],
+                    row["app_id"],
+                    row["phase"],
+                    row["env"],
+                    row["sub_key"],
+                    None,            # status — drawn as pill
+                ][ci]
+
+                if lbl == "Status":
+                    pill(slide, CX + 0.02, RY + 0.02,
+                         cw - 0.06, ROW_H - 0.05, sl, sc, sz=6)
+                elif lbl == "#":
+                    add_text(slide, val, CX, RY, cw - 0.02, ROW_H,
+                             sz=6.5, color=C.txt_muted,
+                             align=PP_ALIGN.CENTER, va="middle", wrap=False)
+                else:
+                    add_text(slide, val, CX + 0.04, RY, cw - 0.06, ROW_H,
+                             sz=7, color=C.txt_dark, va="middle", wrap=False)
+                CX += cw
+
+        org_footer(slide)
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 def main():
     if config.USE_JIRA:
         from jira_loader import load_from_jira
-        d            = load_from_jira()
-        applications = d["applications"]
-        extra        = d["extra_sections"]
-        phase_summary= {}
-        raw_blockers = extra.get("blockers",[])
+        d             = load_from_jira()
+        slide1_apps   = d["slide1_apps"]    # from Stories  → Slide 1 KPI + region
+        slide3_apps   = d["slide3_apps"]    # from Sub-tasks → Slide 3 detail
+        appendix_rows = d["appendix_rows"]  # from Sub-tasks → Appendix flat list
+        phase_summary = {}
+        extra         = d["extra_sections"]
+        raw_blockers  = extra.get("blockers", [])
         if raw_blockers:
             bf = config.EXTRA_SECTIONS.get("blockers",{}).get("fields",{})
             blockers = [{
@@ -785,17 +927,22 @@ def main():
             } for i,iss in enumerate(raw_blockers)]
         else:
             blockers = manual_data.BLOCKERS
-        milestones = manual_data.MILESTONES
+        raw_milestones = extra.get("milestones", [])
+        milestones = raw_milestones if raw_milestones else manual_data.MILESTONES
         print("  Data source: JIRA")
     else:
-        applications  = manual_data.APPLICATIONS
+        # Manual mode: use APPLICATIONS for slide1, SLIDE3_APPLICATIONS for slide3
+        slide1_apps   = manual_data.APPLICATIONS
+        slide3_apps   = getattr(manual_data, "SLIDE3_APPLICATIONS", manual_data.APPLICATIONS)
+        appendix_rows = manual_data.APPENDIX_ROWS if hasattr(manual_data, "APPENDIX_ROWS") else []
         phase_summary = manual_data.PHASE_SUMMARY
         blockers      = manual_data.BLOCKERS
         milestones    = manual_data.MILESTONES
         print("  Data source: data.py (manual)")
 
-    phase_rows  = _build_phase_rows(applications, phase_summary)
-    region_rows = _build_region_rows(applications)
+    # Slide 1 uses slide1_apps (stories); Slide 3 uses slide3_apps (sub-tasks)
+    phase_rows  = _build_phase_rows(slide1_apps, phase_summary)
+    region_rows = _build_region_rows(slide1_apps)
 
     prs = Presentation()
     prs.slide_width  = Inches(SLIDE_W)
@@ -809,13 +956,13 @@ def main():
 
     slide_num = 3
     for phase in config.IN_SCOPE_PHASES:
-        ph_apps = [a for a in applications
+        ph_apps = [a for a in slide3_apps
                    if any(inst["phase"]==phase for inst in a["instances"])]
         if not ph_apps: continue
         n_pages = math.ceil(len(ph_apps) / config.ROWS_PER_DETAIL_SLIDE)
         print(f"  Slides {slide_num}–{slide_num+n_pages-1} — {phase} Detail "
               f"({len(ph_apps)} apps → {n_pages} slide{'s' if n_pages>1 else ''}) ...")
-        build_detail_slides(prs, phase, applications)
+        build_detail_slides(prs, phase, slide3_apps)
         slide_num += n_pages
 
     print(f"  Slide {slide_num} — Blockers ...")
@@ -830,9 +977,14 @@ def main():
     else:
         print(f"  Slide {ms_start} — Milestones ...")
 
-    total = len(prs.slides)
+    ax_start = len(prs.slides) + 1
+    build_appendix_slides(prs, appendix_rows)
+    ax_pages = len(prs.slides) - ax_start + 1
+    if ax_pages > 0:
+        print(f"  Slides {ax_start}–{ax_start+ax_pages-1} — Appendix ({ax_pages} slides, auto-paginated) ...")
+
     prs.save(config.OUTPUT_FILE)
-    print(f"\n✅  Saved: {config.OUTPUT_FILE}  ({total} slides total)")
+    print(f"\nSaved → {config.OUTPUT_FILE}  ({len(prs.slides)} slides total)")
 
 
 if __name__ == "__main__":

@@ -70,21 +70,90 @@ customfield_10042 = "Phase 1"  ✅  values with spaces are fine
 
 ---
 
-### Section 4 — Application grouping
+### Section 4 — Application grouping fields (three separate fields for three sections)
 
-Controls how stories are grouped into one application block (e.g. all Salesforce stories → one Salesforce row).
+**Each section uses a different JIRA issue type and a different field for the app name.**
+
+| Section | Issue type | Field | Purpose |
+|---|---|---|---|
+| **Slide 1** | Story / Task (`JQL_STORIES`) | `SLIDE1_APP_FIELD` | Groups stories into KPI cards |
+| **Slide 3** | Sub-task (`JQL_SUBTASKS`) | `SLIDE3_APP_FIELD` | Groups sub-tasks into detail rows |
+| **Appendix** | Sub-task (`JQL_SUBTASKS`) | `APPENDIX_APP_FIELD` | App name column — no grouping |
+
+---
+
+#### `SLIDE1_APP_GROUPING` + `SLIDE1_APP_FIELD` → **Slide 1 KPI cards**
+
+Stories (from `JQL_STORIES`) are grouped by this field. One card per unique value.
 
 ```python
-APPLICATION_GROUPING = "epic_name"   # recommended
+SLIDE1_APP_GROUPING  = "custom_field"        # how to read the app name from the Story
+SLIDE1_APP_FIELD     = "customfield_XXXXX"   # field KEY on the Story that holds the app name
+SLIDE1_APP_SEPARATOR = " - "                 # only used when SLIDE1_APP_GROUPING = "summary_prefix"
 ```
 
-| Option | Behaviour |
+| `SLIDE1_APP_GROUPING` | Behaviour |
 |--------|-----------|
-| `"epic_name"` | Group by the Epic the story belongs to |
-| `"custom_field"` | Group by a custom field (set `APPLICATION_FIELD = "customfield_XXXXX"`) |
+| `"epic_name"` | Group by the Epic name the story belongs to |
+| `"custom_field"` | Group by value of `SLIDE1_APP_FIELD` (e.g. `"Salesforce"`) |
 | `"label"` | Group by the first JIRA label |
 | `"component"` | Group by the first JIRA component |
-| `"summary_prefix"` | Split story summary on `APPLICATION_SUMMARY_SEPARATOR` (e.g. `" - "`) |
+| `"summary_prefix"` | Split story summary on `SLIDE1_APP_SEPARATOR` |
+
+---
+
+#### `SLIDE3_APP_FIELD` → **Slide 3 detail row labels**
+
+Sub-tasks (from `JQL_SUBTASKS`) are grouped by this field. One row block per unique value.
+This is typically the "Application Name" field on the sub-task — e.g. `"Salesforce"`.
+
+```python
+SLIDE3_APP_FIELD = "customfield_XXXXX"   # field KEY on the Sub-task → left-hand row label on Slide 3
+```
+
+---
+
+#### `APPENDIX_APP_FIELD` → **Appendix "App Name" column**
+
+Each sub-task becomes one row in the Appendix table. No grouping — flat list.
+This field is read as the display value in the "App Name" column.
+
+```python
+APPENDIX_APP_FIELD = "customfield_XXXXX"   # field KEY on the Sub-task → "App Name" column in Appendix
+```
+
+---
+
+#### `INSTANCE_NAME_FIELD` → **Appendix "Instance" column**
+
+The individual instance label for each sub-task row in the Appendix.
+
+```python
+INSTANCE_NAME_FIELD = "summary"              # default: use the sub-task title
+# OR
+INSTANCE_NAME_FIELD = "customfield_XXXXX"    # a dedicated "Instance Name" custom field
+```
+
+---
+
+#### `APP_ID_FIELD` → **Appendix "App ID" column**
+
+```python
+APP_ID_FIELD = "customfield_XXXXX"   # unique app/asset ID — shown in Appendix
+```
+
+---
+
+#### Summary: which field drives which slide
+
+| Config field | Issue type | Used in | Produces |
+|---|---|---|---|
+| `SLIDE1_APP_GROUPING` + `SLIDE1_APP_FIELD` | Story | Slide 1 KPI cards | KPI card per application |
+| `SLIDE3_APP_FIELD` | Sub-task | Slide 3 detail rows | Application name as row label |
+| `APPENDIX_APP_FIELD` | Sub-task | Appendix "App Name" column | App name per sub-task row |
+| `INSTANCE_NAME_FIELD` | Sub-task | Appendix "Instance" column | Individual instance name |
+| `APP_ID_FIELD` | Sub-task | Appendix "App ID" column | Asset/app ID |
+| `PHASE_FIELD` + `PHASE_DISPLAY_NAMES` | Both | All slides | Phase label (short name) |
 
 ---
 

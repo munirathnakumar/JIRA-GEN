@@ -16,10 +16,25 @@
 #             32 Phase-2 apps  → 3 detail slides (14 + 14 + 4 rows)
 # All 5 statuses represented across the dataset.
 
-def _inst(key, summary, phase, status, region, pd, pt, nd, nt):
-    return {"key": key, "summary": summary, "phase": phase, "status": status,
-            "region": region, "prod_done": pd, "prod_total": pt,
-            "non_prod_done": nd, "non_prod_total": nt}
+def _inst(key, summary, phase, status, region, pd, pt, nd, nt,
+          app_id="—", instance_name=None):
+    # Derive simple subtask rows for the Appendix from prod/np counts
+    subtasks = []
+    for i in range(pt):
+        subtasks.append({"key": f"{key}-P{i+1}", "name": f"{summary} Prod {i+1}",
+                         "env": "Prod", "status": "Done" if i < pd else "Not Started",
+                         "done": i < pd})
+    for i in range(nt):
+        subtasks.append({"key": f"{key}-NP{i+1}", "name": f"{summary} Non-Prod {i+1}",
+                         "env": "Non-Prod", "status": "Done" if i < nd else "Not Started",
+                         "done": i < nd})
+    return {"key": key, "summary": summary,
+            "instance_name": instance_name or summary,
+            "app_id": app_id,
+            "phase": phase, "status": status, "region": region,
+            "prod_done": pd, "prod_total": pt,
+            "non_prod_done": nd, "non_prod_total": nt,
+            "subtasks": subtasks}
 
 APPLICATIONS = [
 
@@ -227,6 +242,42 @@ APPLICATIONS = [
         _inst("SSPM-5101","SendGrid - Global",       "Phase 2","de_scoped",      "Global",        0,1,0,0),
     ]},
 ]
+
+
+# =============================================================================
+# =============================================================================
+# SLIDE3_APPLICATIONS  (sub-task based — used for Slide 3 detail rows)
+# In manual mode this mirrors APPLICATIONS. In JIRA mode it is built
+# separately from JQL_SUBTASKS using SLIDE3_APP_FIELD.
+# =============================================================================
+
+SLIDE3_APPLICATIONS = APPLICATIONS   # same mock data; JIRA mode uses a separate build
+
+
+# =============================================================================
+# APPENDIX_ROWS  (flat list from sub-tasks — one row per sub-task)
+# Derived here from the subtasks list embedded in each instance.
+# In JIRA mode these come directly from JQL_SUBTASKS via APPENDIX_APP_FIELD.
+# =============================================================================
+
+def _build_appendix_rows():
+    rows = []
+    for app in APPLICATIONS:
+        for inst in app["instances"]:
+            for st in inst.get("subtasks", []):
+                rows.append({
+                    "app_name" : app["name"],
+                    "inst_name": inst.get("instance_name") or inst.get("summary", ""),
+                    "app_id"   : inst.get("app_id", "—"),
+                    "phase"    : inst.get("phase", ""),
+                    "env"      : st["env"],
+                    "sub_key"  : st["key"],
+                    "sub_name" : st["name"],
+                    "status"   : "completed" if st["done"] else "not_started",
+                })
+    return rows
+
+APPENDIX_ROWS = _build_appendix_rows()
 
 
 # =============================================================================

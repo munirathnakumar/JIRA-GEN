@@ -81,41 +81,66 @@ JQL_SUBTASKS = 'project = "SSPM" AND issuetype = Sub-task ORDER BY created ASC'
 
 
 # =============================================================================
-# 4. APPLICATION GROUPING
+# 4. APPLICATION FIELDS  — THREE SEPARATE FIELDS FOR THREE SEPARATE SLIDES
 # =============================================================================
-# How to determine which "application" a Story belongs to.
-# All stories that resolve to the same application name are grouped together.
 #
-# Options:
-#   "epic_name"      → use the Story's Epic name (recommended for epic-organised boards)
-#   "custom_field"   → use a custom field value on the Story
-#   "label"          → use the first label on the Story that matches an application name
-#   "component"      → use the first JIRA Component on the Story
-#   "summary_prefix" → extract app name from Story summary using a separator
-#                      (e.g. "Salesforce - APAC Prod" → "Salesforce")
+# Each slide section reads from a DIFFERENT JIRA issue type and uses a
+# DIFFERENT field to identify the application name.
 #
-APPLICATION_GROUPING = "epic_name"
+# ── SLIDE 1  (Summary Dashboard) ─────────────────────────────────────────────
+#   Source:  JQL_STORIES  (Stories / Tasks)
+#   The field on each Story that identifies its application group.
+#   All stories with the same value are counted together in the KPI strip.
+#
+#   SLIDE1_APP_GROUPING options:
+#     "custom_field"   → read SLIDE1_APP_FIELD (recommended)
+#     "epic_name"      → use the Epic the story belongs to
+#     "label"          → use the first label on the story
+#     "component"      → use the first JIRA component
+#     "summary_prefix" → split story summary on SLIDE1_APP_SEPARATOR
+#
+SLIDE1_APP_GROUPING = "custom_field"
+SLIDE1_APP_FIELD    = "customfield_XXXXX"   # field KEY on Story → app group label
+SLIDE1_APP_SEPARATOR = " - "               # used only when SLIDE1_APP_GROUPING = "summary_prefix"
 
-# Used only when APPLICATION_GROUPING = "custom_field"
-# Paste the FIELD KEY (no spaces) from find_jira_fields.py
-APPLICATION_FIELD = "customfield_XXXXX"
+# ── SLIDE 3  (Application Detail slides) ─────────────────────────────────────
+#   Source:  JQL_SUBTASKS  (Sub-tasks)
+#   The field on each Sub-task that identifies its application group.
+#   All sub-tasks with the same value are aggregated into one application row.
+#
+SLIDE3_APP_FIELD    = "customfield_XXXXX"   # field KEY on Sub-task → app group label
 
-# Used only when APPLICATION_GROUPING = "summary_prefix"
-# The separator that splits app name from instance detail in the summary
-# e.g. "Salesforce - APAC Prod" uses separator " - "
-APPLICATION_SUMMARY_SEPARATOR = " - "
+# ── APPENDIX  (Flat instance detail table) ───────────────────────────────────
+#   Source:  JQL_SUBTASKS  (Sub-tasks)
+#   No grouping — each sub-task = one row.
+#   This field provides the "Application" column value in the Appendix table.
+#
+APPENDIX_APP_FIELD  = "customfield_XXXXX"   # field KEY on Sub-task → app name column
+
+# ── Shared Appendix fields ───────────────────────────────────────────────────
+INSTANCE_NAME_FIELD = "summary"             # field on Sub-task → "Instance" column
+                                            # use "summary" for sub-task title
+APP_ID_FIELD        = "customfield_XXXXX"   # field on Sub-task → "App ID" column
 
 
 # =============================================================================
 # 5. PHASE IDENTIFICATION  (5 phases)
 # =============================================================================
-# A JIRA field on each Story identifies which of the 5 phases it belongs to.
-# Use find_jira_fields.py to locate the field key.
-#
-PHASE_FIELD = "customfield_XXXXX"   # field KEY, no spaces
+PHASE_FIELD  = "customfield_XXXXX"   # field KEY, no spaces
 
-# Exact dropdown values in JIRA for each phase (spaces in values are fine)
+# Exact dropdown values stored in JIRA for each phase.
 PHASE_VALUES = ["Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5"]
+
+# PHASE_DISPLAY_NAMES — map long JIRA phase values to short slide labels.
+# JIRA often stores verbose values like "Phase 1 - Active Onboarding Q1 2024".
+# Add every exact JIRA value on the LEFT, short PPT label on the RIGHT.
+# Values not listed here are displayed as-is.
+PHASE_DISPLAY_NAMES = {
+    # "Phase 1 - Active Onboarding Q1 2024" : "Phase 1",
+    # "Phase 2 - Onboarding In Progress"     : "Phase 2",
+    # "Phase 3 - Planned"                    : "Phase 3",
+    # Uncomment and edit with your exact JIRA dropdown values
+}
 
 
 # =============================================================================
@@ -223,15 +248,16 @@ EXTRA_SECTIONS = {
         },
     },
     "milestones": {
-        # ← EDIT THIS: JQL that returns your milestone/roadmap issues
+        # ← EDIT THIS: JQL returning Stories to show on the Milestones slide.
+        # Stories are grouped by their parent issue's summary.
+        # e.g. 'project = SSPM AND issuetype = Story AND parent in (SSPM-10, SSPM-20)'
+        # e.g. 'project = SSPM AND issuetype = Story AND "Epic Link" = SSPM-10'
         "jql":         "",
-        # e.g.  '"Epic Link" = SSPM-20 ORDER BY key ASC'
-        # e.g.  'project = SSPM AND issuetype = Epic ORDER BY created ASC'
         "slide_title": "Milestones & Roadmap",
         "fields": {
-            "phase_field":  "customfield_XXXXX",  # field KEY for phase
-            "target_field": "customfield_XXXXX",  # field KEY for target date/sprint
-            "status_field": "status",             # "status" or a custom field KEY
+            "group_by"    : "parent_summary",     # group stories by parent issue summary — do not change
+            "status_field": "status",             # "status" or a custom field KEY for story status
+            "phase_field" : "customfield_XXXXX",  # same field KEY as PHASE_FIELD
         },
     },
 }
@@ -344,3 +370,26 @@ IN_SCOPE_PHASES = ["Phase 1", "Phase 2"]
 
 # Max application rows per detail slide (increase to pack more rows in)
 ROWS_PER_DETAIL_SLIDE = 6
+
+# =============================================================================
+# 12. PHASE BADGE LABELS  (top-right badge on each KPI card — Slide 1)
+# =============================================================================
+# Each phase card shows a small badge in the top-right corner.
+# Set any label you want per phase — e.g. wave name, quarter, status tag.
+# If a phase is not listed here, the badge defaults to "IN SCOPE" / "OUT OF SCOPE".
+#
+# Example:
+#   PHASE_BADGE_LABELS = {
+#       "Phase 1": "Wave 1",
+#       "Phase 2": "Wave 2",
+#       "Phase 3": "Planned",
+#       "Phase 4": "Backlog",
+#   }
+#
+PHASE_BADGE_LABELS = {
+    "Phase 1": "IN SCOPE",
+    "Phase 2": "IN SCOPE",
+    "Phase 3": "OUT OF SCOPE",
+    "Phase 4": "OUT OF SCOPE",
+    "Phase 5": "OUT OF SCOPE",
+}
