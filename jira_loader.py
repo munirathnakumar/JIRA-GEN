@@ -236,6 +236,8 @@ def _story_extra_fields():
 def _subtask_extra_fields():
     """Fields to fetch on Sub-tasks (for Slide 3 + Appendix)."""
     fields = [PHASE_FIELD, REGION_FIELD, SLIDE3_APP_FIELD, APPENDIX_APP_FIELD]
+    if STATUS_FIELD != "status":
+        fields.append(STATUS_FIELD)
     if INSTANCE_TYPE_FIELD and INSTANCE_TYPE_FIELD != "customfield_XXXXX":
         fields.append(INSTANCE_TYPE_FIELD)
     if INSTANCE_NAME_FIELD and INSTANCE_NAME_FIELD != "summary":
@@ -377,6 +379,12 @@ def load_from_jira():
                    for n, i in sorted(s1_dict.items())]
     print(f"  → {len(slide1_apps)} Slide 1 applications (from stories)")
 
+    # Lookup: story_key → canonical status (for Slide 3 instance status)
+    story_status_by_key = {
+        story.get("key", ""): _map_status(story)
+        for story in stories
+    }
+
     # ── Build Slide 3 apps — from Sub-tasks, grouped by SLIDE3_APP_FIELD ──────
     s3_dict = {}
     for st in subtasks:
@@ -391,13 +399,15 @@ def load_from_jira():
         # Each unique parent = one instance row inside the app
         inst_map = s3_dict.setdefault(app_name, {})
         if parent_key not in inst_map:
+            # Use parent story's status — sub-task statuses are just workflow steps
+            inst_status = story_status_by_key.get(parent_key, _map_status(st))
             inst_map[parent_key] = {
                 "key"          : parent_key,
                 "summary"      : (_field(st, "summary") or ""),
                 "instance_name": _get_instance_name(st),
                 "app_id"       : _get_app_id(st),
                 "phase"        : phase,
-                "status"       : _map_status(st),
+                "status"       : inst_status,
                 "region"       : region,
                 "prod_done": 0, "prod_total": 0,
                 "non_prod_done": 0, "non_prod_total": 0,
